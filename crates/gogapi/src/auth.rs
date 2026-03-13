@@ -85,15 +85,10 @@ impl TokenStore {
             urlencoding::encode(REDIRECT_URI),
         );
 
-        let body: String = ureq::get(&url)
-            .call()
+        let resp: TokenResponse = reqwest::blocking::get(&url)
             .map_err(|e| GogError::AuthFailed(e.to_string()))?
-            .body_mut()
-            .read_to_string()
+            .json()
             .map_err(|e| GogError::AuthFailed(e.to_string()))?;
-
-        let resp: TokenResponse =
-            serde_json::from_str(&body).map_err(|e| GogError::AuthFailed(e.to_string()))?;
 
         let lifetime = resp.expires_in.saturating_sub(60);
 
@@ -173,14 +168,10 @@ impl TokenStore {
              &refresh_token={}",
             self.refresh_token,
         );
-        let body: String = ureq::get(&url)
-            .call()
+        let resp: TokenResponse = reqwest::blocking::get(&url)
             .map_err(|e| GogError::AuthFailed(e.to_string()))?
-            .body_mut()
-            .read_to_string()
+            .json()
             .map_err(|e| GogError::AuthFailed(e.to_string()))?;
-        let resp: TokenResponse =
-            serde_json::from_str(&body).map_err(|e| GogError::AuthFailed(e.to_string()))?;
 
         // Shave 60s off the expiry to avoid edge-case races.
         let lifetime = resp.expires_in.saturating_sub(60);

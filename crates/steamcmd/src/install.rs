@@ -1,7 +1,7 @@
 // Auto-install steamcmd by downloading from Valve's CDN and extracting to ~/steamcmd.
 
 use std::fs;
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor};
 use std::path::{Path, PathBuf};
 
 use crate::error::SteamCmdError;
@@ -89,16 +89,11 @@ fn download_url() -> &'static str {
 }
 
 fn download(url: &str) -> Result<Vec<u8>, SteamCmdError> {
-    let response = ureq::get(url)
-        .call()
-        .map_err(|e| SteamCmdError::InstallFailed(format!("download failed: {e}")))?;
-
-    let mut bytes = Vec::new();
-    response
-        .into_body()
-        .into_reader()
-        .read_to_end(&mut bytes)
-        .map_err(SteamCmdError::Io)?;
+    let bytes = reqwest::blocking::get(url)
+        .map_err(|e| SteamCmdError::InstallFailed(format!("download failed: {e}")))?
+        .bytes()
+        .map_err(|e| SteamCmdError::InstallFailed(format!("download failed: {e}")))?
+        .to_vec();
 
     Ok(bytes)
 }

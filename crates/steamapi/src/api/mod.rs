@@ -7,10 +7,8 @@ pub(crate) const API_BASE: &str = "https://api.steampowered.com";
 
 /// Make a GET request and return the response body as a string.
 pub(crate) fn get(url: &str) -> Result<String, crate::SteamError> {
-    ureq::get(url)
-        .call()
+    reqwest::blocking::get(url)
         .map_err(|e| crate::SteamError::Http(e.to_string()))?
-        .body_mut()
-        .read_to_string()
+        .text()
         .map_err(|e| crate::SteamError::Http(e.to_string()))
 }

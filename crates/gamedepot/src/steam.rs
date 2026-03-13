@@ -288,13 +288,9 @@ fn search_steam_store(query: &str) -> Result<Vec<SearchResult>, DepotError> {
         "https://store.steampowered.com/api/storesearch/?term={}&l=english&cc=US",
         urlencoded(query)
     );
-    let body: String = ureq::get(&url)
-        .call()
+    let response: StoreSearchResponse = reqwest::blocking::get(&url)
         .map_err(|e| DepotError::Other(format!("store search request failed: {e}")))?
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| DepotError::Other(format!("failed to read search response: {e}")))?;
-    let response: StoreSearchResponse = serde_json::from_str(&body)
+        .json()
         .map_err(|e| DepotError::Other(format!("failed to parse search response: {e}")))?;
     Ok(response
         .items

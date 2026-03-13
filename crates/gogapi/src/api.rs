@@ -138,22 +138,18 @@ impl Default for Client {
 }
 
 fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, GogError> {
-    let body: String = ureq::get(url)
-        .call()
+    reqwest::blocking::get(url)
         .map_err(|e| GogError::Http(e.to_string()))?
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| GogError::Parse(e.to_string()))?;
-    serde_json::from_str(&body).map_err(|e| GogError::Parse(e.to_string()))
+        .json()
+        .map_err(|e| GogError::Parse(e.to_string()))
 }
 
 fn get_json_authed<T: serde::de::DeserializeOwned>(url: &str, token: &str) -> Result<T, GogError> {
-    let body: String = ureq::get(url)
-        .header("Authorization", &format!("Bearer {token}"))
-        .call()
+    reqwest::blocking::Client::new()
+        .get(url)
+        .bearer_auth(token)
+        .send()
         .map_err(|e| GogError::Http(e.to_string()))?
-        .body_mut()
-        .read_to_string()
-        .map_err(|e| GogError::Parse(e.to_string()))?;
-    serde_json::from_str(&body).map_err(|e| GogError::Parse(e.to_string()))
+        .json()
+        .map_err(|e| GogError::Parse(e.to_string()))
 }
