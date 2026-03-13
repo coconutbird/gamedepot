@@ -185,38 +185,21 @@ fn cmd_steam_login() -> ExitCode {
         .interact()
         .unwrap_or_default();
 
-    let steam_id_input: String = Input::with_theme(&theme)
-        .with_prompt("Steam ID or vanity URL name")
-        .allow_empty(true)
-        .interact_text()
-        .unwrap_or_default();
-
-    // Resolve vanity URL to a 64-bit Steam ID if needed.
-    let steam_id = if api_key.is_empty() {
-        if steam_id_input.is_empty() {
-            None
-        } else {
-            Some(steam_id_input)
-        }
-    } else {
+    // Resolve the username to a 64-bit Steam ID via the API.
+    let steam_id = if !api_key.is_empty() && !username.is_empty() {
         let depot = SteamDepot::api_only().with_api_key(&api_key);
-        if steam_id_input.is_empty() {
-            None
-        } else if steam_id_input.len() == 17 && steam_id_input.chars().all(|c| c.is_ascii_digit()) {
-            Some(steam_id_input)
-        } else {
-            match depot.resolve_vanity_url(&steam_id_input) {
-                Ok(id) => {
-                    println!("Resolved vanity URL to Steam ID: {id}");
-                    Some(id)
-                }
-                Err(e) => {
-                    eprintln!("warning: could not resolve vanity URL: {e}");
-                    eprintln!("         saving raw input as steam_id");
-                    Some(steam_id_input)
-                }
+        match depot.resolve_vanity_url(&username) {
+            Ok(id) => {
+                println!("Resolved Steam ID: {id}");
+                Some(id)
+            }
+            Err(e) => {
+                eprintln!("warning: could not resolve Steam ID from username: {e}");
+                None
             }
         }
+    } else {
+        None
     };
 
     let mut session = Session::load().unwrap_or_default();
