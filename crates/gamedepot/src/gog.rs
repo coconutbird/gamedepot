@@ -4,6 +4,9 @@
 // All filesystem operations (skip checks, file writing) live here;
 // `gogapi` is a pure API/network library.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::depot::DepotError;
 
 /// Re-export gogapi types that callers need.
@@ -112,47 +115,10 @@ impl GogDepot {
     ) -> Result<(), DepotError> {
         let all_files = self.resolve_files(product_id, language)?;
 
-        // Verify existing files on disk, reporting progress.
-        let total_files = all_files.len() as u64;
-        let mut to_download: Vec<&ResolvedFile> = Vec::new();
-        let mut total_compressed: u64 = 0;
-        let mut skipped_bytes: u64 = 0;
-        let mut valid_count: u64 = 0;
-        let mut invalid_count: u64 = 0;
+        let (to_download, skipped_bytes, total_compressed) =
+            verify_files(all_files, install_dir, &mut on_verify)?;
 
-        for (i, file) in all_files.iter().enumerate() {
-            let compressed = file.compressed_size();
-            let dest = install_dir.join(&file.rel_path);
-
-            on_verify(&VerifyProgress {
-                checked: i as u64,
-                total: total_files,
-                valid: valid_count,
-                invalid: invalid_count,
-                current_file: Some(file.rel_path.clone()),
-            });
-
-            if dest.exists() && file_is_valid(&dest, file) {
-                skipped_bytes += compressed;
-                valid_count += 1;
-            } else {
-                invalid_count += 1;
-                to_download.push(file);
-            }
-            total_compressed += compressed;
-        }
-
-        // Final verify report.
-        on_verify(&VerifyProgress {
-            checked: total_files,
-            total: total_files,
-            valid: valid_count,
-            invalid: invalid_count,
-            current_file: None,
-        });
-
-        // Initial download progress report (includes skipped bytes).
-        let downloaded = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(skipped_bytes));
+        let downloaded = Arc::new(AtomicU64::new(skipped_bytes));
         on_progress(&DownloadProgress {
             current_bytes: skipped_bytes,
             total_bytes: total_compressed,
@@ -162,73 +128,162 @@ impl GogDepot {
             return Ok(());
         }
 
-        // Download file-by-file; chunks within each file run in parallel.
-        for file in &to_download {
-            let dl = downloaded.clone();
-            let file_chunks: Vec<_> = file.chunks.iter().enumerate().collect();
-
-            // Parallel download + decompress on a background thread so
-            // we can tick the progress bar on the main thread.
-            let chunks_owned: Vec<_> = file_chunks
-                .iter()
-                .map(|(idx, c)| (*idx, (*c).clone()))
-                .collect();
-            let dl2 = dl.clone();
-
-            let handle = std::thread::spawn(move || {
-                use rayon::prelude::*;
-
-                let results: Vec<Result<(usize, Vec<u8>), String>> = chunks_owned
-                    .par_iter()
-                    .map(|(idx, chunk)| {
-                        let data =
-                            gogapi::GogDl::download_chunk(chunk).map_err(|e| e.to_string())?;
-                        dl2.fetch_add(chunk.compressed_size, std::sync::atomic::Ordering::Relaxed);
-                        Ok((*idx, data))
-                    })
-                    .collect();
-                results
-            });
-
-            // Tick progress while this file downloads.
-            while !handle.is_finished() {
-                on_progress(&DownloadProgress {
-                    current_bytes: downloaded.load(std::sync::atomic::Ordering::Relaxed),
-                    total_bytes: total_compressed,
-                });
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-
-            let results = handle
-                .join()
-                .map_err(|_| DepotError::Other("download thread panicked".into()))?;
-
-            // Sort chunks by index and write to disk.
-            let mut ordered: Vec<(usize, Vec<u8>)> = Vec::with_capacity(results.len());
-            for r in results {
-                let (idx, data) = r.map_err(DepotError::Other)?;
-                ordered.push((idx, data));
-            }
-            ordered.sort_by_key(|(idx, _)| *idx);
-
-            let file_path = install_dir.join(&file.rel_path);
-            if let Some(parent) = file_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            let mut out = std::fs::File::create(&file_path)?;
-            for (_, data) in &ordered {
-                std::io::Write::write_all(&mut out, data)?;
-            }
-        }
+        download_files(
+            &to_download,
+            install_dir,
+            total_compressed,
+            &downloaded,
+            &mut on_progress,
+        )?;
 
         on_progress(&DownloadProgress {
-            current_bytes: downloaded.load(std::sync::atomic::Ordering::Relaxed),
+            current_bytes: downloaded.load(Ordering::Relaxed),
             total_bytes: total_compressed,
         });
 
         Ok(())
     }
+}
+
+/// Verify existing files on disk in parallel using rayon.
+///
+/// Returns `(files_to_download, skipped_bytes, total_compressed)`.
+fn verify_files(
+    all_files: Vec<ResolvedFile>,
+    install_dir: &std::path::Path,
+    on_verify: &mut impl FnMut(&VerifyProgress),
+) -> Result<(Vec<ResolvedFile>, u64, u64), DepotError> {
+    let total_files = all_files.len() as u64;
+    let checked = Arc::new(AtomicU64::new(0));
+    let valid_count = Arc::new(AtomicU64::new(0));
+    let invalid_count = Arc::new(AtomicU64::new(0));
+
+    let install_dir_owned = install_dir.to_path_buf();
+    let checked2 = checked.clone();
+    let valid2 = valid_count.clone();
+    let invalid2 = invalid_count.clone();
+
+    let handle = std::thread::spawn(move || {
+        use rayon::prelude::*;
+
+        all_files
+            .into_par_iter()
+            .map(|file| {
+                let dest = install_dir_owned.join(&file.rel_path);
+                let is_valid = dest.exists() && file_is_valid(&dest, &file);
+                if is_valid {
+                    valid2.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    invalid2.fetch_add(1, Ordering::Relaxed);
+                }
+                checked2.fetch_add(1, Ordering::Relaxed);
+                (file, is_valid)
+            })
+            .collect::<Vec<_>>()
+    });
+
+    while !handle.is_finished() {
+        on_verify(&VerifyProgress {
+            checked: checked.load(Ordering::Relaxed),
+            total: total_files,
+            valid: valid_count.load(Ordering::Relaxed),
+            invalid: invalid_count.load(Ordering::Relaxed),
+            current_file: None,
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let results = handle
+        .join()
+        .map_err(|_| DepotError::Other("verify thread panicked".into()))?;
+
+    on_verify(&VerifyProgress {
+        checked: total_files,
+        total: total_files,
+        valid: valid_count.load(Ordering::Relaxed),
+        invalid: invalid_count.load(Ordering::Relaxed),
+        current_file: None,
+    });
+
+    let mut to_download: Vec<ResolvedFile> = Vec::new();
+    let mut total_compressed: u64 = 0;
+    let mut skipped_bytes: u64 = 0;
+
+    for (file, is_valid) in results {
+        let compressed = file.compressed_size();
+        total_compressed += compressed;
+        if is_valid {
+            skipped_bytes += compressed;
+        } else {
+            to_download.push(file);
+        }
+    }
+
+    Ok((to_download, skipped_bytes, total_compressed))
+}
+
+/// Download files one at a time, with chunks within each file in parallel.
+fn download_files(
+    to_download: &[ResolvedFile],
+    install_dir: &std::path::Path,
+    total_compressed: u64,
+    downloaded: &Arc<AtomicU64>,
+    on_progress: &mut impl FnMut(&DownloadProgress),
+) -> Result<(), DepotError> {
+    for file in to_download {
+        let dl = downloaded.clone();
+        let chunks_owned: Vec<_> = file
+            .chunks
+            .iter()
+            .enumerate()
+            .map(|(idx, c)| (idx, c.clone()))
+            .collect();
+        let dl2 = dl.clone();
+
+        let handle = std::thread::spawn(move || {
+            use rayon::prelude::*;
+
+            chunks_owned
+                .par_iter()
+                .map(|(idx, chunk)| {
+                    let data = gogapi::GogDl::download_chunk(chunk).map_err(|e| e.to_string())?;
+                    dl2.fetch_add(chunk.compressed_size, Ordering::Relaxed);
+                    Ok((*idx, data))
+                })
+                .collect::<Vec<Result<(usize, Vec<u8>), String>>>()
+        });
+
+        while !handle.is_finished() {
+            on_progress(&DownloadProgress {
+                current_bytes: downloaded.load(Ordering::Relaxed),
+                total_bytes: total_compressed,
+            });
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        let results = handle
+            .join()
+            .map_err(|_| DepotError::Other("download thread panicked".into()))?;
+
+        let mut ordered: Vec<(usize, Vec<u8>)> = Vec::with_capacity(results.len());
+        for r in results {
+            let (idx, data) = r.map_err(DepotError::Other)?;
+            ordered.push((idx, data));
+        }
+        ordered.sort_by_key(|(idx, _)| *idx);
+
+        let file_path = install_dir.join(&file.rel_path);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut out = std::fs::File::create(&file_path)?;
+        for (_, data) in &ordered {
+            std::io::Write::write_all(&mut out, data)?;
+        }
+    }
+
+    Ok(())
 }
 
 impl Default for GogDepot {
@@ -250,10 +305,8 @@ fn file_is_valid(path: &std::path::Path, file: &ResolvedFile) -> bool {
 
 /// Check if a file on disk matches the expected MD5 hash.
 ///
-/// Uses mmap + hardware-accelerated MD5 (md5-asm) for maximum throughput.
+/// Uses mmap + SIMD-accelerated MD5 for maximum throughput.
 fn file_md5_matches(path: &std::path::Path, expected: &str) -> bool {
-    use md5_hash::Digest;
-
     let Ok(file) = std::fs::File::open(path) else {
         return false;
     };
@@ -261,17 +314,15 @@ fn file_md5_matches(path: &std::path::Path, expected: &str) -> bool {
         return false;
     };
 
-    let digest = md5_hash::Md5::digest(&mmap);
+    let digest = md5::compute(&mmap);
     format!("{digest:x}") == expected.to_lowercase()
 }
 
 /// Check if a file on disk matches by size and per-chunk MD5.
 ///
-/// Memory-maps the file once and slices it into chunk-sized regions,
-/// hashing each slice with hardware-accelerated MD5.
+/// Memory-maps the file once and hashes chunks 4-at-a-time using
+/// `compute4` (NEON on ARM, scalar fallback elsewhere).
 fn file_size_and_chunks_match(path: &std::path::Path, file: &ResolvedFile) -> bool {
-    use md5_hash::Digest;
-
     let expected_size = file.uncompressed_size();
 
     let Ok(meta) = path.metadata() else {
@@ -288,18 +339,43 @@ fn file_size_and_chunks_match(path: &std::path::Path, file: &ResolvedFile) -> bo
         return false;
     };
 
+    // Build (offset, size, expected_md5) for every chunk.
+    let mut slices: Vec<(usize, usize, &str)> = Vec::with_capacity(file.chunks.len());
     let mut offset: usize = 0;
     for chunk in &file.chunks {
         #[allow(clippy::cast_possible_truncation)]
-        let end = offset + chunk.size as usize;
-        if end > mmap.len() {
+        let len = chunk.size as usize;
+        if offset + len > mmap.len() {
             return false;
         }
-        let digest = md5_hash::Md5::digest(&mmap[offset..end]);
-        if format!("{digest:x}") != chunk.md5.to_lowercase() {
+        slices.push((offset, len, &chunk.md5));
+        offset += len;
+    }
+
+    // Hash in batches of 4 with compute4.
+    let mut i = 0;
+    while i + 4 <= slices.len() {
+        let inputs: [&[u8]; 4] = [
+            &mmap[slices[i].0..slices[i].0 + slices[i].1],
+            &mmap[slices[i + 1].0..slices[i + 1].0 + slices[i + 1].1],
+            &mmap[slices[i + 2].0..slices[i + 2].0 + slices[i + 2].1],
+            &mmap[slices[i + 3].0..slices[i + 3].0 + slices[i + 3].1],
+        ];
+        let digests = md5::compute4(inputs);
+        for j in 0..4 {
+            if format!("{:x}", digests[j]) != slices[i + j].2.to_lowercase() {
+                return false;
+            }
+        }
+        i += 4;
+    }
+
+    // Handle remaining chunks (< 4).
+    for &(off, len, expected) in &slices[i..] {
+        let digest = md5::compute(&mmap[off..off + len]);
+        if format!("{digest:x}") != expected.to_lowercase() {
             return false;
         }
-        offset = end;
     }
 
     true

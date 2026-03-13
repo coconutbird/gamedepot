@@ -6,7 +6,7 @@ description = "A library for downloading Steam and GOG games"
 
 [dependencies]
 gogapi = { version = "0.1.0", path = "../gogapi" }
-md5_hash = { version = "0.10.6", package = "md-5", features = ["asm"] }
+md5 = { git = "https://github.com/coconutbird/md5" }
 memmap2 = "0.9.10"
 rayon = "1.11.0"
 reqwest = { version = "0.13.2", features = ["blocking", "json"] }
