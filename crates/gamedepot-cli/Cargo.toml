@@ -7,3 +7,4 @@ description = "CLI tool for downloading Steam and GOG games"
 [dependencies]
 clap = { version = "4.6.0", features = ["derive"] }
 gamedepot = { path = "../gamedepot" }
+indicatif = "0.18.4"
