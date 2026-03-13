@@ -1,7 +1,11 @@
 //! Steam Web API client.
 //!
-//! Provides access to Steam's Web API for querying owned games,
-//! player summaries, and resolving vanity URLs.
+//! Wraps the public Steam Web API endpoints:
+//!
+//! - **`ISteamUser`** — player summaries, friend lists, bans, vanity URLs
+//! - **`IPlayerService`** — owned games, recently played, Steam level
+//! - **`ISteamUserStats`** — achievements, stats, global percentages
+//! - **`ISteamNews`** — app news
 //!
 //! # Example
 //!
@@ -25,6 +29,10 @@ pub mod error;
 pub mod types;
 
 pub use error::SteamError;
+pub use types::{
+    AchievementPercentage, Friend, NewsItem, OwnedGame, PlayerAchievement, PlayerBan, PlayerStat,
+    PlayerSummary,
+};
 
 /// Steam Web API client.
 #[derive(Debug, Clone)]
