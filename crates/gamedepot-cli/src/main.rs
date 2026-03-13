@@ -54,8 +54,8 @@ enum SteamCommands {
     },
     /// Show remote app info.
     Info {
-        /// App ID to query.
-        app_id: String,
+        /// ID to query.
+        id: String,
     },
     /// Check local install status.
     Status {
@@ -93,6 +93,9 @@ enum SteamCommands {
     Owned {
         /// Steam ID or vanity URL name (uses saved ID if omitted).
         steam_id: Option<String>,
+        /// Optional search filter.
+        #[arg(short, long)]
+        search: Option<String>,
     },
     /// Download and install `SteamCMD` to ~/steamcmd.
     InstallSteamcmd,
@@ -109,8 +112,8 @@ enum GogCommands {
     },
     /// Show product info.
     Info {
-        /// GOG product ID.
-        product_id: String,
+        /// ID to query.
+        id: String,
     },
     /// List games you own (requires login).
     Owned {
@@ -561,7 +564,7 @@ fn read_steam_id() -> Option<String> {
     Session::load().ok().and_then(|s| s.steam.steam_id)
 }
 
-fn cmd_steam_owned(api_key: &str, steam_id_or_vanity: &str) -> ExitCode {
+fn cmd_steam_owned(api_key: &str, steam_id_or_vanity: &str, search: Option<&str>) -> ExitCode {
     let depot = SteamDepot::api_only().with_api_key(api_key);
 
     // If the input looks like a 64-bit Steam ID, use it directly.
@@ -582,6 +585,17 @@ fn cmd_steam_owned(api_key: &str, steam_id_or_vanity: &str) -> ExitCode {
 
     match depot.owned_games(&steam_id, true) {
         Ok(games) => {
+            // Apply optional search filter (case-insensitive).
+            let games: Vec<_> = if let Some(q) = search {
+                let q = q.to_lowercase();
+                games
+                    .into_iter()
+                    .filter(|g| g.name.as_deref().unwrap_or("").to_lowercase().contains(&q))
+                    .collect()
+            } else {
+                games
+            };
+
             if games.is_empty() {
                 println!("No owned games found (profile may be private).");
             } else {
@@ -627,8 +641,8 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        SteamCommands::Info { app_id } => match build_depot(install, None) {
-            Ok(mut depot) => cmd_info(&mut depot, &app_id),
+        SteamCommands::Info { id } => match build_depot(install, None) {
+            Ok(mut depot) => cmd_info(&mut depot, &id),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
@@ -664,7 +678,7 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        SteamCommands::Owned { steam_id } => {
+        SteamCommands::Owned { steam_id, search } => {
             let Some(api_key) = read_steam_api_key() else {
                 eprintln!("error: no API key. Run `gamedepot steam login` or set STEAM_API_KEY.");
                 return ExitCode::FAILURE;
@@ -674,7 +688,7 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
                 eprintln!("error: no Steam ID. Run `gamedepot steam login` or pass a Steam ID.");
                 return ExitCode::FAILURE;
             };
-            cmd_steam_owned(&api_key, &steam_id)
+            cmd_steam_owned(&api_key, &steam_id, search.as_deref())
         }
         SteamCommands::InstallSteamcmd => cmd_install_steamcmd(),
     }
@@ -684,7 +698,7 @@ fn run_gog_command(command: GogCommands) -> ExitCode {
     match command {
         GogCommands::Login => cmd_gog_login(),
         GogCommands::Search { query } => cmd_gog_search(&query),
-        GogCommands::Info { product_id } => cmd_gog_info(&product_id),
+        GogCommands::Info { id } => cmd_gog_info(&id),
         GogCommands::Owned { search, page } => {
             let Some(token) = read_gog_token() else {
                 eprintln!("error: not logged in. Run `gamedepot gog login` first.");
