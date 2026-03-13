@@ -46,9 +46,9 @@ enum SteamCommands {
     Download {
         /// App ID to download.
         app_id: String,
-        /// Directory to install into.
+        /// Directory to install into (defaults to ~/gamedepot/steam/<name>/).
         #[arg(short, long)]
-        dir: PathBuf,
+        dir: Option<PathBuf>,
         /// Target platform override.
         #[arg(long)]
         platform: Option<String>,
@@ -61,7 +61,7 @@ enum SteamCommands {
     /// Check local install status.
     Status {
         /// App ID to check.
-        app_id: String,
+        id: String,
     },
     /// Search the Steam store for games.
     Search {
@@ -114,6 +114,11 @@ enum GogCommands {
     /// Show product info.
     Info {
         /// ID to query.
+        id: String,
+    },
+    /// Check local install status.
+    Status {
+        /// Product ID to check.
         id: String,
     },
     /// List games you own (requires login).
@@ -270,6 +275,16 @@ fn progress_bar() -> indicatif::ProgressBar {
         .progress_chars("━╸━"),
     );
     bar
+}
+
+/// Build the default install directory: ~/gamedepot/<depot>/<name>/
+/// Falls back to the app ID if the name can't be determined or the
+/// home directory is unavailable.
+fn default_install_dir(depot_name: &str, game_name: &str) -> PathBuf {
+    let base = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_or_else(|_| PathBuf::from("."), PathBuf::from);
+    base.join("gamedepot").join(depot_name).join(game_name)
 }
 
 fn print_app_info(depot: &mut SteamDepot, app_id: &str) {
@@ -435,7 +450,7 @@ fn cmd_info(depot: &mut SteamDepot, app_id: &str) -> ExitCode {
     }
 }
 
-fn cmd_status(app_id: &str) -> ExitCode {
+fn cmd_status(app_id: &str, depot: &DepotKind) -> ExitCode {
     let manifest = match Manifest::load() {
         Ok(m) => m,
         Err(e) => {
@@ -443,9 +458,13 @@ fn cmd_status(app_id: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let installs = manifest.find_by_id(app_id);
+    let installs: Vec<_> = manifest
+        .find_by_id(app_id)
+        .into_iter()
+        .filter(|i| i.depot == *depot)
+        .collect();
     if installs.is_empty() {
-        println!("No tracked installs for {app_id}.");
+        println!("No tracked {depot} installs for {app_id}.");
         return ExitCode::SUCCESS;
     }
     for install in installs {
@@ -720,7 +739,17 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
             dir,
             platform,
         } => match build_depot(install, platform) {
-            Ok(mut depot) => cmd_download(&mut depot, &app_id, &dir),
+            Ok(mut depot) => {
+                let dir = dir.unwrap_or_else(|| {
+                    let name = depot
+                        .app_info(&app_id)
+                        .ok()
+                        .and_then(|i| i.name)
+                        .unwrap_or_else(|| app_id.clone());
+                    default_install_dir("steam", &name)
+                });
+                cmd_download(&mut depot, &app_id, &dir)
+            }
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
@@ -733,7 +762,7 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        SteamCommands::Status { app_id } => cmd_status(&app_id),
+        SteamCommands::Status { id } => cmd_status(&id, &DepotKind::Steam),
         SteamCommands::Search { query } => cmd_search(&query),
         SteamCommands::Validate {
             app_id,
@@ -778,6 +807,7 @@ fn run_gog_command(command: GogCommands) -> ExitCode {
         GogCommands::Login => cmd_gog_login(),
         GogCommands::Search { query } => cmd_gog_search(&query),
         GogCommands::Info { id } => cmd_gog_info(&id),
+        GogCommands::Status { id } => cmd_status(&id, &DepotKind::Gog),
         GogCommands::Owned { search, page } => {
             let Some(token) = read_gog_token() else {
                 eprintln!("error: not logged in. Run `gamedepot gog login` first.");

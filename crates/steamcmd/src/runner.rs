@@ -15,6 +15,9 @@ const PROMPT: &str = "Steam>";
 /// Substrings that indicate Steam Guard is active during login.
 const STEAM_GUARD_HINTS: &[&str] = &["steam guard", "mobile authenticator", "confirm the login"];
 
+/// Substring that indicates steamcmd is asking for a password.
+const PASSWORD_PROMPT: &str = "password:";
+
 /// A long-lived steamcmd session.
 ///
 /// Spawns the steamcmd process inside a pseudo-terminal so that its
@@ -28,14 +31,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// Spawn steamcmd and log in.
+    /// Spawn steamcmd and log in, reusing cached credentials when
+    /// possible.
     ///
-    /// The child process runs inside a pseudo-terminal so that its
-    /// output is line-buffered (matching real-terminal behaviour).
-    /// If Steam Guard is active, `on_auth_prompt` is called with the
-    /// prompt text so the caller can inform the user (e.g. "confirm
-    /// on your phone"). Steamcmd then waits for the user to approve
-    /// via the Steam Mobile app and continues automatically.
+    /// The process is started with `+login <username>` (no password).
+    /// If steamcmd still has a valid cached session it logs straight
+    /// in without prompting. If the session has expired it will ask
+    /// for a password, which we supply automatically. This avoids
+    /// redundant Steam Guard / Mobile Authenticator prompts.
     ///
     /// # Errors
     ///
@@ -54,16 +57,15 @@ impl Session {
             cmd.arg(p.as_steamcmd_str());
         }
 
-        // Login as part of the initial launch args so steamcmd
-        // handles the authentication flow before presenting a prompt.
+        // Pass +login with username only — no password. Steamcmd will
+        // use cached credentials if available, or prompt for password.
         cmd.arg("+login");
         match login {
             Login::Anonymous => {
                 cmd.arg("anonymous");
             }
-            Login::Credentials { username, password } => {
+            Login::Credentials { username, .. } => {
                 cmd.arg(username);
-                cmd.arg(password);
             }
         }
 
@@ -101,8 +103,14 @@ impl Session {
         };
 
         // Read until the first prompt — this consumes the login output.
-        // If Steam Guard is required, handle the auth prompt.
-        session.read_login_output(on_auth_prompt)?;
+        // If steamcmd asks for a password (cached session expired), we
+        // supply it. If Steam Guard is required, the auth handler is
+        // called so the caller can inform the user.
+        let password = match login {
+            Login::Credentials { password, .. } => Some(password.as_str()),
+            Login::Anonymous => None,
+        };
+        session.read_login_output(password, on_auth_prompt)?;
 
         Ok(session)
     }
@@ -158,21 +166,25 @@ impl Session {
         Ok(())
     }
 
-    /// Read login output, detecting Steam Guard prompts. Reads
-    /// byte-by-byte looking for the `Steam>` prompt (login succeeded).
-    /// If a Steam Guard message is detected, the `on_auth_prompt`
-    /// callback is invoked so the caller can inform the user. No stdin
-    /// input is sent — steamcmd waits for the user to approve via the
-    /// Steam Mobile app and then continues automatically.
+    /// Read login output, detecting password and Steam Guard prompts.
+    ///
+    /// Reads byte-by-byte looking for the `Steam>` prompt (login
+    /// succeeded). If steamcmd asks for a password (cached session
+    /// expired), the password is supplied automatically. If a Steam
+    /// Guard message is detected, `on_auth_prompt` is called so the
+    /// caller can inform the user. Steamcmd then waits for the user
+    /// to approve via the Steam Mobile app and continues.
     fn read_login_output(
         &mut self,
+        password: Option<&str>,
         mut on_auth_prompt: Option<&mut dyn FnMut(&str)>,
     ) -> Result<String, SteamCmdError> {
         let mut buf = Vec::new();
         let mut output = String::new();
         let mut byte = [0u8; 1];
         let prompt_bytes = PROMPT.as_bytes();
-        let mut notified = false;
+        let mut guard_notified = false;
+        let mut password_sent = false;
 
         loop {
             let n = self.reader.read(&mut byte).map_err(SteamCmdError::Io)?;
@@ -195,18 +207,27 @@ impl Session {
                 break;
             }
 
-            // On each newline, flush the buffer and check for Steam
-            // Guard messages.
+            // On each newline, flush the buffer and check for password
+            // requests and Steam Guard messages.
             if byte[0] == b'\n' {
                 let line = String::from_utf8_lossy(&buf).to_string();
                 output.push_str(&line);
+                let lower = line.to_lowercase();
+
+                // Supply the password if steamcmd asks for it.
+                if !password_sent && lower.contains(PASSWORD_PROMPT) {
+                    if let Some(pw) = password {
+                        writeln!(self.writer, "{pw}").map_err(SteamCmdError::Io)?;
+                        self.writer.flush().map_err(SteamCmdError::Io)?;
+                    }
+                    password_sent = true;
+                }
 
                 // Notify the caller once when we see a Steam Guard hint.
-                if !notified {
-                    let lower = line.to_lowercase();
+                if !guard_notified {
                     let is_guard = STEAM_GUARD_HINTS.iter().any(|h| lower.contains(h));
                     if is_guard {
-                        notified = true;
+                        guard_notified = true;
                         if let Some(ref mut handler) = on_auth_prompt {
                             handler(line.trim());
                         }
