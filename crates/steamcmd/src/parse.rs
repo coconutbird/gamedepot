@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::{AppInfo, AppStatus, DownloadProgress};
+use crate::{AppInfo, AppStatus, DownloadProgress, UpdateState};
 
 /// Extract quoted `"key" "value"` pairs from steamcmd VDF-like output.
 pub(crate) fn extract_kv_pairs(text: &str) -> HashMap<String, String> {
@@ -59,8 +59,8 @@ pub(crate) fn parse_progress(line: &str) -> Option<DownloadProgress> {
 
     // Extract state name: everything between ") " and ","
     let after_paren = rest.split(") ").nth(1)?;
-    let (state, after_state) = after_paren.split_once(',')?;
-    let state = state.trim().to_string();
+    let (state_label, after_state) = after_paren.split_once(',')?;
+    let state = UpdateState::from_label(state_label);
 
     // Extract percent: "progress: XX.XX"
     let after_progress = after_state.strip_prefix(" progress: ")?;

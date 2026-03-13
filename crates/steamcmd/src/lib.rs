@@ -12,11 +12,64 @@ pub use runner::Session;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Phase of a download or update operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateState {
+    /// Reconfiguring app metadata.
+    Reconfiguring,
+    /// Validating existing files.
+    Validating,
+    /// Pre-allocating disk space.
+    Preallocating,
+    /// Downloading new content.
+    Downloading,
+    /// Verifying downloaded content.
+    Verifying,
+    /// Staging files before final placement.
+    Staging,
+    /// Committing changes to disk.
+    Committing,
+    /// An unrecognized state.
+    Unknown,
+}
+
+impl UpdateState {
+    /// Parse from the text label steamcmd outputs (e.g. `"downloading"`).
+    #[must_use]
+    pub fn from_label(s: &str) -> Self {
+        match s.trim() {
+            "reconfiguring" => Self::Reconfiguring,
+            "validating" => Self::Validating,
+            "preallocating" => Self::Preallocating,
+            "downloading" => Self::Downloading,
+            "verifying update" => Self::Verifying,
+            "staging" => Self::Staging,
+            "committing" => Self::Committing,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+impl std::fmt::Display for UpdateState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reconfiguring => write!(f, "reconfiguring"),
+            Self::Validating => write!(f, "validating"),
+            Self::Preallocating => write!(f, "preallocating"),
+            Self::Downloading => write!(f, "downloading"),
+            Self::Verifying => write!(f, "verifying"),
+            Self::Staging => write!(f, "staging"),
+            Self::Committing => write!(f, "committing"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
 /// Structured progress update from a download or update operation.
 #[derive(Debug, Clone)]
 pub struct DownloadProgress {
-    /// Current phase (e.g. `"downloading"`, `"verifying update"`).
-    pub state: String,
+    /// Current phase of the operation.
+    pub state: UpdateState,
     /// Completion percentage (0.0–100.0).
     pub percent: f64,
     /// Bytes processed so far.
