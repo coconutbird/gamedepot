@@ -1,0 +1,9 @@
+[package]
+name = "gamedepot"
+version = "0.1.0"
+edition = "2024"
+description = "A library for downloading Steam and GOG games"
+
+[dependencies]
+steamcmd = { path = "../steamcmd" }
+thiserror = "2"

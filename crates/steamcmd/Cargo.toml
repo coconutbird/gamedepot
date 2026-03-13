@@ -1,0 +1,13 @@
+[package]
+name = "steamcmd"
+version = "0.1.0"
+edition = "2024"
+description = "Standalone wrapper around the SteamCMD binary"
+
+[dependencies]
+flate2 = "1.1.9"
+tar = "0.4.44"
+thiserror = "2"
+ureq = "3.2.0"
+which = "8"
+zip = "8.2.0"

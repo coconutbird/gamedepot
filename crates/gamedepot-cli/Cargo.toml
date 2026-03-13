@@ -1,0 +1,9 @@
+[package]
+name = "gamedepot-cli"
+version = "0.1.0"
+edition = "2024"
+description = "CLI tool for downloading Steam and GOG games"
+
+[dependencies]
+clap = { version = "4.6.0", features = ["derive"] }
+gamedepot = { path = "../gamedepot" }

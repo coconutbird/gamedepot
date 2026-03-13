@@ -1,0 +1,1 @@
+// GOG game downloading functionality.
