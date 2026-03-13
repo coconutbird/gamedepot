@@ -1,3 +1,5 @@
+mod session;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -6,6 +8,8 @@ use clap::{Parser, Subcommand};
 use gamedepot::depot::{Depot, DepotError};
 use gamedepot::steam::{Login, Platform, SteamDepot};
 use gogdl::GogDl;
+
+use session::Session;
 
 #[derive(Parser)]
 #[command(name = "gamedepot", about = "Download Steam and GOG games")]
@@ -389,26 +393,31 @@ fn cmd_gog_login() -> ExitCode {
     }
 
     let mut gog = GogDl::new();
-    match gog.login_with_code(&input) {
-        Ok(()) => {
-            match gog.refresh_token() {
-                Ok(token) => {
-                    println!("\nLogin successful!");
-                    println!("Refresh token (save this for future use):\n");
-                    println!("  {token}");
-                }
-                Err(e) => {
-                    eprintln!("error retrieving token: {e}");
-                    return ExitCode::FAILURE;
-                }
-            }
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
+    if let Err(e) = gog.login_with_code(&input) {
+        eprintln!("error: {e}");
+        return ExitCode::FAILURE;
     }
+
+    let token = match gog.refresh_token() {
+        Ok(t) => t.to_owned(),
+        Err(e) => {
+            eprintln!("error retrieving token: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Persist to ~/.gamedepot/session.toml.
+    let mut session = Session::load().unwrap_or_default();
+    session.gog.refresh_token = Some(token);
+    if let Err(e) = session.save() {
+        eprintln!("warning: could not save session: {e}");
+    }
+
+    match Session::path() {
+        Ok(p) => println!("\nLogin successful! Session saved to {}", p.display()),
+        Err(_) => println!("\nLogin successful!"),
+    }
+    ExitCode::SUCCESS
 }
 
 fn cmd_gog_search(query: &str) -> ExitCode {
@@ -457,6 +466,9 @@ fn cmd_gog_owned(search: Option<&str>, page: u32, refresh_token: &str) -> ExitCo
     let mut gog = GogDl::new().with_refresh_token(refresh_token);
     match gog.owned_products(search, page) {
         Ok(products) => {
+            // Persist the rotated refresh token.
+            save_gog_token(&gog);
+
             if products.is_empty() {
                 println!("No owned products found.");
             } else {
@@ -477,7 +489,27 @@ fn cmd_gog_owned(search: Option<&str>, page: u32, refresh_token: &str) -> ExitCo
     }
 }
 
+/// Persist the (possibly rotated) GOG refresh token back to the session.
+fn save_gog_token(gog: &GogDl) {
+    if let Ok(token) = gog.refresh_token() {
+        let mut session = Session::load().unwrap_or_default();
+        session.gog.refresh_token = Some(token.to_owned());
+        if let Err(e) = session.save() {
+            eprintln!("warning: could not save session: {e}");
+        }
+    }
+}
+
+/// Read the GOG refresh token from the session file, falling back to
+/// the `GOG_REFRESH_TOKEN` environment variable.
 fn read_gog_token() -> Option<String> {
+    // Session file takes priority.
+    if let Ok(session) = Session::load()
+        && let Some(token) = session.gog.refresh_token
+    {
+        return Some(token);
+    }
+    // Fall back to env var.
     std::env::var("GOG_REFRESH_TOKEN").ok()
 }
 
@@ -568,7 +600,7 @@ fn run_gog_command(command: GogCommands) -> ExitCode {
         GogCommands::Info { product_id } => cmd_gog_info(&product_id),
         GogCommands::Owned { search, page } => {
             let Some(token) = read_gog_token() else {
-                eprintln!("error: GOG_REFRESH_TOKEN not set. Run `gamedepot gog login` first.");
+                eprintln!("error: not logged in. Run `gamedepot gog login` first.");
                 return ExitCode::FAILURE;
             };
             cmd_gog_owned(search.as_deref(), page, &token)
