@@ -9,7 +9,7 @@ use dialoguer::{Input, Password};
 use gamedepot::depot::{Depot, DepotError};
 use gamedepot::gog::GogDepot;
 use gamedepot::manifest::{DepotKind, Install, Manifest};
-use gamedepot::steam::{Login, Platform, SteamDepot};
+use gamedepot::steam::{Login, Platform, SteamDepot, UpdateResult};
 
 use session::Session;
 
@@ -339,6 +339,12 @@ fn save_manifest_entry(
 }
 
 fn cmd_download(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
+    // Pre-create the directory so steamcmd uses our casing instead
+    // of lowercasing the folder name.
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        eprintln!("error: could not create install directory: {e}");
+        return ExitCode::FAILURE;
+    }
     print_app_info(depot, app_id);
     let bar = progress_bar();
     match depot.download_with_progress(app_id, dir, |p| {
@@ -346,8 +352,16 @@ fn cmd_download(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
         bar.set_position(p.current_bytes);
         bar.set_message(p.state.to_string());
     }) {
-        Ok(()) => {
-            bar.finish_with_message("done");
+        Ok(result) => {
+            match result {
+                UpdateResult::AlreadyUpToDate => {
+                    bar.finish_and_clear();
+                    println!("Already up to date.");
+                }
+                UpdateResult::Updated => {
+                    bar.finish_with_message("done");
+                }
+            }
             // Try to get name/build_id for the manifest.
             let (name, build_id) = depot
                 .app_info(app_id)
@@ -378,8 +392,16 @@ fn cmd_validate(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
         bar.set_position(p.current_bytes);
         bar.set_message(p.state.to_string());
     }) {
-        Ok(()) => {
-            bar.finish_with_message("done");
+        Ok(result) => {
+            match result {
+                UpdateResult::AlreadyUpToDate => {
+                    bar.finish_and_clear();
+                    println!("Already up to date.");
+                }
+                UpdateResult::Updated => {
+                    bar.finish_with_message("done");
+                }
+            }
             let (name, build_id) = depot
                 .app_info(app_id)
                 .map(|i| (i.name, i.build_id))
@@ -409,8 +431,16 @@ fn cmd_update(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
         bar.set_position(p.current_bytes);
         bar.set_message(p.state.to_string());
     }) {
-        Ok(()) => {
-            bar.finish_with_message("done");
+        Ok(result) => {
+            match result {
+                UpdateResult::AlreadyUpToDate => {
+                    bar.finish_and_clear();
+                    println!("Already up to date.");
+                }
+                UpdateResult::Updated => {
+                    bar.finish_with_message("done");
+                }
+            }
             let (name, build_id) = depot
                 .app_info(app_id)
                 .map(|i| (i.name, i.build_id))
@@ -435,11 +465,15 @@ fn cmd_update(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
 fn cmd_info(depot: &mut SteamDepot, app_id: &str) -> ExitCode {
     match depot.app_info(app_id) {
         Ok(info) => {
-            println!("App ID:    {}", info.app_id);
-            println!("Name:      {}", info.name.as_deref().unwrap_or("unknown"));
+            println!("App ID:      {}", info.app_id);
+            println!("Name:        {}", info.name.as_deref().unwrap_or("unknown"));
             println!(
-                "Build ID:  {}",
+                "Build ID:    {}",
                 info.build_id.as_deref().unwrap_or("unknown")
+            );
+            println!(
+                "Install Dir: {}",
+                info.install_dir.as_deref().unwrap_or("unknown")
             );
             ExitCode::SUCCESS
         }
@@ -741,12 +775,13 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
         } => match build_depot(install, platform) {
             Ok(mut depot) => {
                 let dir = dir.unwrap_or_else(|| {
-                    let name = depot
-                        .app_info(&app_id)
-                        .ok()
-                        .and_then(|i| i.name)
+                    let info = depot.app_info(&app_id).ok();
+                    let dir_name = info
+                        .as_ref()
+                        .and_then(|i| i.install_dir.clone())
+                        .or_else(|| info.as_ref().and_then(|i| i.name.clone()))
                         .unwrap_or_else(|| app_id.clone());
-                    default_install_dir("steam", &name)
+                    default_install_dir("steam", &dir_name)
                 });
                 cmd_download(&mut depot, &app_id, &dir)
             }

@@ -6,7 +6,7 @@ use std::path::Path;
 use crate::depot::{AppInfo, AppStatus, Depot, DepotError, SearchResult};
 
 /// Re-export steamcmd types that callers need for construction.
-pub use steamcmd::{Login, Platform};
+pub use steamcmd::{Login, Platform, UpdateResult};
 
 /// Re-export steamapi types that callers need.
 pub use steamapi::types::{OwnedGame, PlayerSummary};
@@ -152,7 +152,7 @@ impl SteamDepot {
         app_id: &str,
         install_dir: &Path,
         on_progress: impl FnMut(&steamcmd::DownloadProgress),
-    ) -> Result<(), DepotError> {
+    ) -> Result<steamcmd::UpdateResult, DepotError> {
         self.require_cmd()?
             .download_with_progress(app_id, install_dir, on_progress)
             .map_err(map_err)
@@ -168,7 +168,7 @@ impl SteamDepot {
         app_id: &str,
         install_dir: &Path,
         on_progress: impl FnMut(&steamcmd::DownloadProgress),
-    ) -> Result<(), DepotError> {
+    ) -> Result<steamcmd::UpdateResult, DepotError> {
         self.require_cmd()?
             .validate_with_progress(app_id, install_dir, on_progress)
             .map_err(map_err)
@@ -241,15 +241,18 @@ impl Depot for SteamDepot {
     fn download(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
         self.require_cmd()?
             .download(app_id, install_dir)
+            .map(|_| ())
             .map_err(map_err)
     }
 
     fn app_info(&mut self, app_id: &str) -> Result<AppInfo, DepotError> {
         let info = self.require_cmd()?.app_info(app_id).map_err(map_err)?;
+        let install_dir = info.raw.get("installdir").cloned();
         Ok(AppInfo {
             app_id: info.app_id,
             name: info.name,
             build_id: info.build_id,
+            install_dir,
         })
     }
 
@@ -272,12 +275,14 @@ impl Depot for SteamDepot {
     fn validate(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
         self.require_cmd()?
             .validate(app_id, install_dir)
+            .map(|_| ())
             .map_err(map_err)
     }
 
     fn update(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
         self.require_cmd()?
             .download(app_id, install_dir)
+            .map(|_| ())
             .map_err(map_err)
     }
 }

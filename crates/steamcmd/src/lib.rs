@@ -78,6 +78,15 @@ pub struct DownloadProgress {
     pub total_bytes: u64,
 }
 
+/// Outcome of a download or update operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateResult {
+    /// Files were downloaded or updated.
+    Updated,
+    /// The app was already up to date — nothing was downloaded.
+    AlreadyUpToDate,
+}
+
 /// Target platform for downloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
@@ -338,7 +347,11 @@ impl SteamCmd {
     /// # Errors
     ///
     /// Returns an error if steamcmd fails.
-    pub fn download(&mut self, app_id: &str, install_dir: &Path) -> Result<(), SteamCmdError> {
+    pub fn download(
+        &mut self,
+        app_id: &str,
+        install_dir: &Path,
+    ) -> Result<UpdateResult, SteamCmdError> {
         self.download_with_progress(app_id, install_dir, |_| {})
     }
 
@@ -353,18 +366,20 @@ impl SteamCmd {
         app_id: &str,
         install_dir: &Path,
         mut on_progress: impl FnMut(&DownloadProgress),
-    ) -> Result<(), SteamCmdError> {
+    ) -> Result<UpdateResult, SteamCmdError> {
         let session = self.session()?;
         session.run_command(&format!(
-            "force_install_dir {}",
+            "force_install_dir \"{}\"",
             install_dir.to_string_lossy()
         ))?;
-        session.run_command_with_callback(&format!("app_update {app_id}"), |line| {
-            if let Some(progress) = parse::parse_progress(line) {
-                on_progress(&progress);
-            }
-        })?;
-        Ok(())
+        let output =
+            session.run_command_with_callback(&format!("app_update {app_id}"), |line| {
+                if let Some(progress) = parse::parse_progress(line) {
+                    on_progress(&progress);
+                }
+            })?;
+        check_output_for_error(&output)?;
+        Ok(parse_update_result(&output))
     }
 
     /// Validate existing files for an installed app.
@@ -372,7 +387,11 @@ impl SteamCmd {
     /// # Errors
     ///
     /// Returns an error if steamcmd fails.
-    pub fn validate(&mut self, app_id: &str, install_dir: &Path) -> Result<(), SteamCmdError> {
+    pub fn validate(
+        &mut self,
+        app_id: &str,
+        install_dir: &Path,
+    ) -> Result<UpdateResult, SteamCmdError> {
         self.validate_with_progress(app_id, install_dir, |_| {})
     }
 
@@ -387,18 +406,22 @@ impl SteamCmd {
         app_id: &str,
         install_dir: &Path,
         mut on_progress: impl FnMut(&DownloadProgress),
-    ) -> Result<(), SteamCmdError> {
+    ) -> Result<UpdateResult, SteamCmdError> {
         let session = self.session()?;
         session.run_command(&format!(
-            "force_install_dir {}",
+            "force_install_dir \"{}\"",
             install_dir.to_string_lossy()
         ))?;
-        session.run_command_with_callback(&format!("app_update {app_id} -validate"), |line| {
-            if let Some(progress) = parse::parse_progress(line) {
-                on_progress(&progress);
-            }
-        })?;
-        Ok(())
+        let output = session.run_command_with_callback(
+            &format!("app_update {app_id} -validate"),
+            |line| {
+                if let Some(progress) = parse::parse_progress(line) {
+                    on_progress(&progress);
+                }
+            },
+        )?;
+        check_output_for_error(&output)?;
+        Ok(parse_update_result(&output))
     }
 
     /// Query app info from Steam's servers.
@@ -427,6 +450,30 @@ impl SteamCmd {
         let output = session.run_command(&format!("app_status {app_id}"))?;
         Ok(parse::parse_app_status(app_id, &output))
     }
+}
+
+/// Determine whether steamcmd actually downloaded anything or the app
+/// was already up to date.
+fn parse_update_result(output: &str) -> UpdateResult {
+    let lower = output.to_lowercase();
+    if lower.contains("already up to date") {
+        UpdateResult::AlreadyUpToDate
+    } else {
+        UpdateResult::Updated
+    }
+}
+
+/// Check steamcmd output for error messages and return an appropriate
+/// error if one is found.
+fn check_output_for_error(output: &str) -> Result<(), SteamCmdError> {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("error!") || lower.contains("no subscription") {
+            return Err(SteamCmdError::Other(trimmed.to_owned()));
+        }
+    }
+    Ok(())
 }
 
 /// The base value added to a Steam3 account ID to get a 64-bit Steam ID.

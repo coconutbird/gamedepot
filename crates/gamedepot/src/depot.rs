@@ -11,6 +11,8 @@ pub struct AppInfo {
     pub name: Option<String>,
     /// Remote build identifier used to detect updates.
     pub build_id: Option<String>,
+    /// Canonical install directory name (e.g. "`HaloWarsDE`").
+    pub install_dir: Option<String>,
 }
 
 /// A search result from the store.
