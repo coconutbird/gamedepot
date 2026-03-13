@@ -128,3 +128,50 @@ pub struct BuildItem {
     pub generation: u32,
     pub link: Option<String>,
 }
+
+// ── Owned Library ─────────────────────────────────────────────────────
+
+/// Response from the owned-products endpoint
+/// (`/account/getFilteredProducts`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedProductsResponse {
+    pub page: u32,
+    pub total_products: u32,
+    pub total_pages: u32,
+    pub products_per_page: u32,
+    #[serde(default)]
+    pub products: Vec<OwnedProduct>,
+}
+
+/// A product the user owns.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnedProduct {
+    pub id: u64,
+    pub title: String,
+    pub slug: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    pub rating: Option<u32>,
+    #[serde(default)]
+    pub is_game: bool,
+    #[serde(default)]
+    pub is_movie: bool,
+    #[serde(default)]
+    pub is_coming_soon: bool,
+    #[serde(default)]
+    pub works_on: Option<WorksOn>,
+}
+
+/// Platform support flags from the owned-products response.
+#[derive(Debug, Deserialize)]
+#[allow(non_snake_case)]
+pub struct WorksOn {
+    #[serde(default)]
+    pub Windows: bool,
+    #[serde(default)]
+    pub Mac: bool,
+    #[serde(default)]
+    pub Linux: bool,
+}

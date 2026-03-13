@@ -1,11 +1,12 @@
 // HTTP client for the GOG REST API.
 
 use crate::error::GogError;
-use crate::types::{BuildsResponse, CatalogResponse, ProductResponse};
+use crate::types::{BuildsResponse, CatalogResponse, OwnedProductsResponse, ProductResponse};
 
 const CATALOG_URL: &str = "https://catalog.gog.com/v1/catalog";
 const PRODUCT_URL: &str = "https://api.gog.com/products";
 const BUILDS_URL: &str = "https://content-system.gog.com/products";
+const EMBED_URL: &str = "https://embed.gog.com";
 
 /// HTTP client for the GOG REST API.
 ///
@@ -76,6 +77,7 @@ impl Client {
              &query={query}",
             self.country_code, self.locale, self.currency_code,
         );
+
         get_json(&url)
     }
 
@@ -102,6 +104,31 @@ impl Client {
         let url = format!("{BUILDS_URL}/{product_id}/os/{os}/builds?generation=2");
         get_json(&url)
     }
+
+    /// List products owned by the authenticated user.
+    ///
+    /// Optionally filter by a search string. Results are paginated;
+    /// pass the page number (1-based).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no token is set, or the request fails.
+    pub fn owned_products(
+        &self,
+        search: Option<&str>,
+        page: u32,
+    ) -> Result<OwnedProductsResponse, GogError> {
+        let token = self
+            .token
+            .as_deref()
+            .ok_or_else(|| GogError::AuthRequired("owned_products requires a token".into()))?;
+        let mut url = format!("{EMBED_URL}/account/getFilteredProducts?mediaType=1&page={page}");
+        if let Some(q) = search {
+            url.push_str("&search=");
+            url.push_str(q);
+        }
+        get_json_authed(&url, token)
+    }
 }
 
 impl Default for Client {
@@ -112,6 +139,17 @@ impl Default for Client {
 
 fn get_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, GogError> {
     let body: String = ureq::get(url)
+        .call()
+        .map_err(|e| GogError::Http(e.to_string()))?
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| GogError::Parse(e.to_string()))?;
+    serde_json::from_str(&body).map_err(|e| GogError::Parse(e.to_string()))
+}
+
+fn get_json_authed<T: serde::de::DeserializeOwned>(url: &str, token: &str) -> Result<T, GogError> {
+    let body: String = ureq::get(url)
+        .header("Authorization", &format!("Bearer {token}"))
         .call()
         .map_err(|e| GogError::Http(e.to_string()))?
         .body_mut()

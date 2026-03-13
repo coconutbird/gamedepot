@@ -1,6 +1,7 @@
 // GOG game downloader using the GOG REST API.
 
 pub mod api;
+pub mod auth;
 mod error;
 pub mod types;
 
@@ -73,6 +74,7 @@ pub struct AppInfo {
 pub struct GogDl {
     client: api::Client,
     platform: Option<Platform>,
+    token_store: Option<auth::TokenStore>,
 }
 
 impl GogDl {
@@ -82,6 +84,7 @@ impl GogDl {
         Self {
             client: api::Client::new(),
             platform: None,
+            token_store: None,
         }
     }
 
@@ -92,10 +95,13 @@ impl GogDl {
         self
     }
 
-    /// Set an `OAuth2` access token for authenticated requests.
+    /// Set a GOG refresh token for authenticated requests.
+    ///
+    /// The token will be automatically exchanged for short-lived
+    /// access tokens as needed.
     #[must_use]
-    pub fn with_token(mut self, token: impl Into<String>) -> Self {
-        self.client.token = Some(token.into());
+    pub fn with_refresh_token(mut self, refresh_token: impl Into<String>) -> Self {
+        self.token_store = Some(auth::TokenStore::new(refresh_token));
         self
     }
 
@@ -172,11 +178,56 @@ impl GogDl {
         Ok(resp.items)
     }
 
+    /// List or search products owned by the authenticated user.
+    ///
+    /// Pass `None` to list all owned products, or `Some("query")` to
+    /// filter by name. Results are paginated (page is 1-based).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no refresh token is set, the token exchange
+    /// fails, or the request fails.
+    pub fn owned_products(
+        &mut self,
+        search: Option<&str>,
+        page: u32,
+    ) -> Result<Vec<types::OwnedProduct>, GogError> {
+        self.ensure_authed()?;
+        let resp = self.client.owned_products(search, page)?;
+        Ok(resp.products)
+    }
+
+    /// Return the current refresh token (it rotates on every exchange).
+    ///
+    /// Useful for persisting the latest token to disk so the user
+    /// doesn't have to re-authenticate.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no token store is configured.
+    pub fn refresh_token(&self) -> Result<&str, GogError> {
+        self.token_store
+            .as_ref()
+            .map(auth::TokenStore::refresh_token)
+            .ok_or_else(|| GogError::AuthRequired("no refresh token configured".into()))
+    }
+
     /// Get the latest build ID for the configured platform, if any.
     fn latest_build_id(&self, product_id: &str) -> Option<String> {
         let os = self.platform?.as_gog_str();
         let resp = self.client.builds(product_id, os).ok()?;
         resp.items.first().map(|b| b.build_id.clone())
+    }
+
+    /// Ensure the API client has a valid access token.
+    fn ensure_authed(&mut self) -> Result<(), GogError> {
+        let store = self
+            .token_store
+            .as_mut()
+            .ok_or_else(|| GogError::AuthRequired("no refresh token configured".into()))?;
+        let token = store.access_token()?.to_owned();
+        self.client.token = Some(token);
+        Ok(())
     }
 }
 
