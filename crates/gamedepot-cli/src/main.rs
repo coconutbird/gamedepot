@@ -185,16 +185,29 @@ fn cmd_steam_login() -> ExitCode {
         .interact()
         .unwrap_or_default();
 
-    // Resolve the username to a 64-bit Steam ID via the API.
-    let steam_id = if !api_key.is_empty() && !username.is_empty() {
-        let depot = SteamDepot::api_only().with_api_key(&api_key);
-        match depot.resolve_vanity_url(&username) {
-            Ok(id) => {
-                println!("Resolved Steam ID: {id}");
-                Some(id)
+    // Resolve the 64-bit Steam ID by doing a quick steamcmd login.
+    let steam_id = if !username.is_empty() && !password.is_empty() {
+        println!("Resolving Steam ID via steamcmd...");
+        let login = Login::Credentials {
+            username: username.clone(),
+            password: password.clone(),
+        };
+        match SteamDepot::install_or_locate() {
+            Ok(depot) => {
+                let mut depot = depot.with_login(login);
+                match depot.steam_id() {
+                    Ok(id) => {
+                        println!("Resolved Steam ID: {id}");
+                        Some(id)
+                    }
+                    Err(e) => {
+                        eprintln!("warning: could not resolve Steam ID: {e}");
+                        None
+                    }
+                }
             }
             Err(e) => {
-                eprintln!("warning: could not resolve Steam ID from username: {e}");
+                eprintln!("warning: steamcmd not available, skipping Steam ID resolution: {e}");
                 None
             }
         }

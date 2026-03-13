@@ -213,6 +213,17 @@ impl SteamDepot {
             .resolve_vanity_url(vanity_name)
             .map_err(|e| DepotError::Other(e.to_string()))
     }
+
+    /// Get the 64-bit Steam ID of the currently logged-in user via
+    /// steamcmd's `info` command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if steamcmd is not available, the session
+    /// cannot be started, or the Steam ID cannot be parsed.
+    pub fn steam_id(&mut self) -> Result<String, DepotError> {
+        self.require_cmd()?.steam_id().map_err(map_err)
+    }
 }
 
 impl Depot for SteamDepot {
