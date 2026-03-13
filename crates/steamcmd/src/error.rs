@@ -22,4 +22,8 @@ pub enum SteamCmdError {
     /// Auto-install of steamcmd failed.
     #[error("steamcmd install failed: {0}")]
     InstallFailed(String),
+
+    /// Any other error.
+    #[error("{0}")]
+    Other(String),
 }

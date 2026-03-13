@@ -4,10 +4,10 @@ pub mod cmd;
 mod error;
 pub mod install;
 mod parse;
-mod runner;
+pub mod runner;
 
 pub use error::SteamCmdError;
-pub use runner::Output;
+pub use runner::Session;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -181,6 +181,16 @@ impl SteamCmd {
         &self.path
     }
 
+    /// Open a long-lived session: spawn steamcmd, log in, and return a
+    /// handle that accepts commands via stdin.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process cannot be spawned or login fails.
+    pub fn session(&self) -> Result<Session, SteamCmdError> {
+        Session::start(&self.path, &self.login, self.platform)
+    }
+
     /// Download or update an app.
     ///
     /// # Errors
@@ -192,16 +202,14 @@ impl SteamCmd {
         install_dir: &Path,
         validate: bool,
     ) -> Result<(), SteamCmdError> {
-        let args = cmd::CommandBuilder::new()
-            .maybe_platform(self.platform)
-            .force_install_dir(install_dir)
-            .login(&self.login)
-            .app_update(app_id, validate)
-            .quit()
-            .build();
-
-        runner::run(&self.path, &args)?;
-        Ok(())
+        let mut session = self.session()?;
+        session.run_command(&format!(
+            "force_install_dir {}",
+            install_dir.to_string_lossy()
+        ))?;
+        let validate_flag = if validate { " -validate" } else { "" };
+        session.run_command(&format!("app_update {app_id}{validate_flag}"))?;
+        session.quit()
     }
 
     /// Query app info from Steam's servers.
@@ -213,16 +221,12 @@ impl SteamCmd {
     ///
     /// Returns an error if steamcmd fails.
     pub fn app_info(&self, app_id: &str) -> Result<AppInfo, SteamCmdError> {
-        let args = cmd::CommandBuilder::new()
-            .login(&self.login)
-            .app_info_update()
-            .app_info_print(app_id)
-            .app_info_print(app_id)
-            .quit()
-            .build();
-
-        let output = runner::run(&self.path, &args)?;
-        Ok(parse::parse_app_info(app_id, &output.stdout))
+        let mut session = self.session()?;
+        session.run_command("app_info_update 1")?;
+        session.run_command(&format!("app_info_print {app_id}"))?;
+        let output = session.run_command(&format!("app_info_print {app_id}"))?;
+        session.quit()?;
+        Ok(parse::parse_app_info(app_id, &output))
     }
 
     /// Check the local install status of an app.
@@ -231,13 +235,9 @@ impl SteamCmd {
     ///
     /// Returns an error if steamcmd fails.
     pub fn app_status(&self, app_id: &str) -> Result<AppStatus, SteamCmdError> {
-        let args = cmd::CommandBuilder::new()
-            .login(&self.login)
-            .app_status(app_id)
-            .quit()
-            .build();
-
-        let output = runner::run(&self.path, &args)?;
-        Ok(parse::parse_app_status(app_id, &output.stdout))
+        let mut session = self.session()?;
+        let output = session.run_command(&format!("app_status {app_id}"))?;
+        session.quit()?;
+        Ok(parse::parse_app_status(app_id, &output))
     }
 }
