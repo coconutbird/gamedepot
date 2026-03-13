@@ -503,14 +503,12 @@ fn save_gog_token(gog: &GogDl) {
 /// Read the GOG refresh token from the session file, falling back to
 /// the `GOG_REFRESH_TOKEN` environment variable.
 fn read_gog_token() -> Option<String> {
-    // Session file takes priority.
-    if let Ok(session) = Session::load()
-        && let Some(token) = session.gog.refresh_token
-    {
+    // Env var takes priority over session file.
+    if let Ok(token) = std::env::var("GOG_REFRESH_TOKEN") {
         return Some(token);
     }
-    // Fall back to env var.
-    std::env::var("GOG_REFRESH_TOKEN").ok()
+    // Fall back to session file.
+    Session::load().ok().and_then(|s| s.gog.refresh_token)
 }
 
 // ── main ────────────────────────────────────────────────────────────
