@@ -154,14 +154,10 @@ fn build_depot(install: bool, platform: Option<String>) -> Result<SteamDepot, De
         },
         _ => Login::Anonymous,
     };
-    let theme = ColorfulTheme::default();
     let mut depot = get_depot(install)?
         .with_login(login)
-        .with_auth_handler(move |prompt| {
-            Input::with_theme(&theme)
-                .with_prompt(prompt)
-                .interact_text()
-                .unwrap_or_default()
+        .with_auth_handler(|_| {
+            println!("Steam Guard: please confirm the login in your Steam Mobile app.");
         });
     if let Some(p) = parse_platform(platform) {
         depot = depot.with_platform(p);
@@ -202,13 +198,10 @@ fn cmd_steam_login() -> ExitCode {
         };
         match SteamDepot::install_or_locate() {
             Ok(depot) => {
-                let mut depot = depot.with_login(login).with_auth_handler(|prompt| {
-                    let theme = ColorfulTheme::default();
-                    Input::with_theme(&theme)
-                        .with_prompt(prompt)
-                        .interact_text()
-                        .unwrap_or_default()
+                let mut depot = depot.with_login(login).with_auth_handler(|_| {
+                    println!("Steam Guard: please confirm the login in your Steam Mobile app.");
                 });
+
                 match depot.steam_id() {
                     Ok(id) => {
                         println!("Resolved Steam ID: {id}");

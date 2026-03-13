@@ -1,8 +1,10 @@
-// Process execution — spawns steamcmd and captures output.
+// Process execution — spawns steamcmd inside a pseudo-terminal so
+// that its output is line-buffered (same as a real terminal).
 
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::error::SteamCmdError;
 use crate::{Login, Platform};
@@ -10,31 +12,30 @@ use crate::{Login, Platform};
 /// The prompt string steamcmd prints when ready for input.
 const PROMPT: &str = "Steam>";
 
-/// Substrings that indicate steamcmd is waiting for an auth code.
-const AUTH_PROMPTS: &[&str] = &[
-    "Two-factor code:",
-    "Steam Guard code:",
-    "two-factor code",
-    "steam guard code",
-];
+/// Substrings that indicate Steam Guard is active during login.
+const STEAM_GUARD_HINTS: &[&str] = &["steam guard", "mobile authenticator", "confirm the login"];
 
 /// A long-lived steamcmd session.
 ///
-/// Spawns the steamcmd process once, handles login, and then accepts
-/// commands via stdin. Output is read byte-by-byte until the `Steam>`
-/// prompt appears, indicating the command has finished.
+/// Spawns the steamcmd process inside a pseudo-terminal so that its
+/// output arrives with the same buffering as a real terminal. Commands
+/// are sent via the pty writer and output is read byte-by-byte until
+/// the `Steam>` prompt appears.
 pub struct Session {
-    child: Child,
-    stdout: std::process::ChildStdout,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
 }
 
 impl Session {
     /// Spawn steamcmd and log in.
     ///
-    /// If Steam Guard or TOTP is required, `on_auth_prompt` is called
-    /// with the prompt text and must return the auth code. Pass `None`
-    /// if no interactive auth handling is needed (login will hang if
-    /// Steam Guard is required).
+    /// The child process runs inside a pseudo-terminal so that its
+    /// output is line-buffered (matching real-terminal behaviour).
+    /// If Steam Guard is active, `on_auth_prompt` is called with the
+    /// prompt text so the caller can inform the user (e.g. "confirm
+    /// on your phone"). Steamcmd then waits for the user to approve
+    /// via the Steam Mobile app and continues automatically.
     ///
     /// # Errors
     ///
@@ -43,41 +44,61 @@ impl Session {
         steamcmd_path: &Path,
         login: &Login,
         platform: Option<Platform>,
-        on_auth_prompt: Option<&mut dyn FnMut(&str) -> String>,
+        on_auth_prompt: Option<&mut dyn FnMut(&str)>,
     ) -> Result<Self, SteamCmdError> {
-        let mut initial_args: Vec<String> = Vec::new();
+        let mut cmd = CommandBuilder::new(steamcmd_path);
 
         // Platform override must come before anything else.
         if let Some(p) = platform {
-            initial_args.push("+@sSteamCmdForcePlatformType".into());
-            initial_args.push(p.as_steamcmd_str().into());
+            cmd.arg("+@sSteamCmdForcePlatformType");
+            cmd.arg(p.as_steamcmd_str());
         }
 
         // Login as part of the initial launch args so steamcmd
         // handles the authentication flow before presenting a prompt.
-        initial_args.push("+login".into());
+        cmd.arg("+login");
         match login {
-            Login::Anonymous => initial_args.push("anonymous".into()),
+            Login::Anonymous => {
+                cmd.arg("anonymous");
+            }
             Login::Credentials { username, password } => {
-                initial_args.push(username.clone());
-                initial_args.push(password.clone());
+                cmd.arg(username);
+                cmd.arg(password);
             }
         }
 
-        let mut child = Command::new(steamcmd_path)
-            .args(&initial_args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(SteamCmdError::Io)?;
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 200,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| SteamCmdError::Other(format!("failed to open pty: {e}")))?;
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| SteamCmdError::Other("failed to capture stdout".into()))?;
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| SteamCmdError::Other(format!("failed to spawn steamcmd: {e}")))?;
 
-        let mut session = Self { child, stdout };
+        // Drop the slave side — we only need the master.
+        drop(pair.slave);
+
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| SteamCmdError::Other(format!("failed to clone pty reader: {e}")))?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|e| SteamCmdError::Other(format!("failed to take pty writer: {e}")))?;
+
+        let mut session = Self {
+            child,
+            reader,
+            writer,
+        };
 
         // Read until the first prompt — this consumes the login output.
         // If Steam Guard is required, handle the auth prompt.
@@ -112,16 +133,10 @@ impl Session {
         self.read_until_prompt_with_callback(&mut on_line)
     }
 
-    /// Write a command to the child's stdin.
+    /// Write a command to the pty.
     fn send_command(&mut self, command: &str) -> Result<(), SteamCmdError> {
-        let stdin = self
-            .child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| SteamCmdError::Other("stdin not available".into()))?;
-
-        writeln!(stdin, "{command}").map_err(SteamCmdError::Io)?;
-        stdin.flush().map_err(SteamCmdError::Io)?;
+        writeln!(self.writer, "{command}").map_err(SteamCmdError::Io)?;
+        self.writer.flush().map_err(SteamCmdError::Io)?;
         Ok(())
     }
 
@@ -131,31 +146,36 @@ impl Session {
     ///
     /// Returns an error if the process cannot be waited on.
     pub fn quit(mut self) -> Result<(), SteamCmdError> {
-        if let Some(stdin) = self.child.stdin.as_mut() {
-            let _ = writeln!(stdin, "quit");
-            let _ = stdin.flush();
-        }
-        // Drop stdin so the process sees EOF.
-        drop(self.child.stdin.take());
-
-        self.child.wait().map_err(SteamCmdError::Io)?;
+        let _ = writeln!(self.writer, "quit");
+        let _ = self.writer.flush();
+        // Drain the pty reader so steamcmd doesn't block writing its
+        // shutdown output to a full buffer.
+        let mut sink = [0u8; 1024];
+        while self.reader.read(&mut sink).unwrap_or(0) > 0 {}
+        self.child
+            .wait()
+            .map_err(|e| SteamCmdError::Other(format!("failed to wait on child: {e}")))?;
         Ok(())
     }
 
-    /// Read login output, handling Steam Guard / TOTP prompts if they
-    /// appear. Reads byte-by-byte looking for either the `Steam>` prompt
-    /// (login succeeded) or an auth code prompt.
+    /// Read login output, detecting Steam Guard prompts. Reads
+    /// byte-by-byte looking for the `Steam>` prompt (login succeeded).
+    /// If a Steam Guard message is detected, the `on_auth_prompt`
+    /// callback is invoked so the caller can inform the user. No stdin
+    /// input is sent — steamcmd waits for the user to approve via the
+    /// Steam Mobile app and then continues automatically.
     fn read_login_output(
         &mut self,
-        mut on_auth_prompt: Option<&mut dyn FnMut(&str) -> String>,
+        mut on_auth_prompt: Option<&mut dyn FnMut(&str)>,
     ) -> Result<String, SteamCmdError> {
         let mut buf = Vec::new();
         let mut output = String::new();
         let mut byte = [0u8; 1];
         let prompt_bytes = PROMPT.as_bytes();
+        let mut notified = false;
 
         loop {
-            let n = self.stdout.read(&mut byte).map_err(SteamCmdError::Io)?;
+            let n = self.reader.read(&mut byte).map_err(SteamCmdError::Io)?;
             if n == 0 {
                 if !buf.is_empty() {
                     output.push_str(&String::from_utf8_lossy(&buf));
@@ -175,49 +195,29 @@ impl Session {
                 break;
             }
 
-            // On each newline (or when the buffer looks like an auth
-            // prompt), check whether steamcmd is asking for a code.
-            // Auth prompts typically end with ":" and no newline.
-            let current = String::from_utf8_lossy(&buf).to_string();
-            let is_auth = AUTH_PROMPTS
-                .iter()
-                .any(|p| current.to_lowercase().contains(p));
-
-            if is_auth {
-                output.push_str(&current);
-                buf.clear();
-
-                if let Some(ref mut handler) = on_auth_prompt {
-                    let code = handler(current.trim());
-                    self.write_stdin(&code)?;
-                } else {
-                    return Err(SteamCmdError::Other(
-                        "Steam Guard code required but no auth handler provided".into(),
-                    ));
-                }
-                continue;
-            }
-
-            // Flush completed lines.
+            // On each newline, flush the buffer and check for Steam
+            // Guard messages.
             if byte[0] == b'\n' {
-                output.push_str(&current);
+                let line = String::from_utf8_lossy(&buf).to_string();
+                output.push_str(&line);
+
+                // Notify the caller once when we see a Steam Guard hint.
+                if !notified {
+                    let lower = line.to_lowercase();
+                    let is_guard = STEAM_GUARD_HINTS.iter().any(|h| lower.contains(h));
+                    if is_guard {
+                        notified = true;
+                        if let Some(ref mut handler) = on_auth_prompt {
+                            handler(line.trim());
+                        }
+                    }
+                }
+
                 buf.clear();
             }
         }
 
         Ok(output)
-    }
-
-    /// Write a line to the child's stdin (used for auth codes).
-    fn write_stdin(&mut self, text: &str) -> Result<(), SteamCmdError> {
-        let stdin = self
-            .child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| SteamCmdError::Other("stdin not available".into()))?;
-        writeln!(stdin, "{text}").map_err(SteamCmdError::Io)?;
-        stdin.flush().map_err(SteamCmdError::Io)?;
-        Ok(())
     }
 
     /// Read bytes from stdout until we see the `Steam>` prompt.
@@ -228,7 +228,7 @@ impl Session {
         self.read_until_prompt_with_callback(&mut |_| {})
     }
 
-    /// Read bytes from stdout until the `Steam>` prompt, calling
+    /// Read bytes from the pty until the `Steam>` prompt, calling
     /// `on_line` for each complete line as it arrives.
     fn read_until_prompt_with_callback(
         &mut self,
@@ -240,7 +240,7 @@ impl Session {
         let prompt_bytes = PROMPT.as_bytes();
 
         loop {
-            let n = self.stdout.read(&mut byte).map_err(SteamCmdError::Io)?;
+            let n = self.reader.read(&mut byte).map_err(SteamCmdError::Io)?;
             if n == 0 {
                 // EOF — flush any remaining partial line.
                 if !buf.is_empty() {
@@ -282,12 +282,12 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // Best-effort: send quit if stdin is still open.
-        if let Some(stdin) = self.child.stdin.as_mut() {
-            let _ = writeln!(stdin, "quit");
-            let _ = stdin.flush();
-        }
-        drop(self.child.stdin.take());
+        let _ = writeln!(self.writer, "quit");
+        let _ = self.writer.flush();
+        // Drain the pty reader so steamcmd doesn't block writing its
+        // shutdown output to a full buffer.
+        let mut sink = [0u8; 1024];
+        while self.reader.read(&mut sink).unwrap_or(0) > 0 {}
         let _ = self.child.wait();
     }
 }

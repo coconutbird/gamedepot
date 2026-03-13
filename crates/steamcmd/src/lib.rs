@@ -146,9 +146,9 @@ impl AppStatus {
     }
 }
 
-/// A boxed callback that receives a Steam Guard / TOTP prompt and
-/// returns the auth code entered by the user.
-type AuthHandler = Box<dyn FnMut(&str) -> String>;
+/// A boxed callback that receives a Steam Guard notification message
+/// so the caller can inform the user (e.g. "confirm on your phone").
+type AuthHandler = Box<dyn FnMut(&str)>;
 
 /// Wrapper around the steamcmd binary.
 ///
@@ -266,11 +266,11 @@ impl SteamCmd {
         self
     }
 
-    /// Set a callback for handling Steam Guard / TOTP prompts during
-    /// login. The callback receives the prompt text and must return
-    /// the auth code.
+    /// Set a callback for Steam Guard notifications during login.
+    /// The callback receives the prompt text so the caller can inform
+    /// the user (e.g. "confirm on your phone").
     #[must_use]
-    pub fn with_auth_handler(mut self, handler: impl FnMut(&str) -> String + 'static) -> Self {
+    pub fn with_auth_handler(mut self, handler: impl FnMut(&str) + 'static) -> Self {
         self.auth_handler = Some(Box::new(handler));
         self
     }
