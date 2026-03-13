@@ -1,9 +1,11 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use gamedepot::depot::{Depot, DepotError};
 use gamedepot::steam::{Login, Platform, SteamDepot};
+use gogdl::GogDl;
 
 #[derive(Parser)]
 #[command(name = "gamedepot", about = "Download Steam and GOG games")]
@@ -18,6 +20,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Steam commands.
+    Steam {
+        #[command(subcommand)]
+        command: SteamCommands,
+    },
+    /// GOG commands.
+    Gog {
+        #[command(subcommand)]
+        command: GogCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SteamCommands {
     /// Download or update a game.
     Download {
         /// App ID to download.
@@ -25,7 +41,6 @@ enum Commands {
         /// Directory to install into.
         #[arg(short, long)]
         dir: PathBuf,
-
         /// Steam username (omit for anonymous).
         #[arg(short, long)]
         username: Option<String>,
@@ -101,6 +116,31 @@ enum Commands {
     },
     /// Download and install `SteamCMD` to ~/steamcmd.
     InstallSteamcmd,
+}
+
+#[derive(Subcommand)]
+enum GogCommands {
+    /// Log in to GOG via browser-based `OAuth2`.
+    Login,
+    /// Search the GOG catalog.
+    Search {
+        /// Search query (game name).
+        query: String,
+    },
+    /// Show product info.
+    Info {
+        /// GOG product ID.
+        product_id: String,
+    },
+    /// List games you own (requires login).
+    Owned {
+        /// Optional search filter.
+        #[arg(short, long)]
+        search: Option<String>,
+        /// Page number (1-based).
+        #[arg(short, long, default_value = "1")]
+        page: u32,
+    },
 }
 
 fn parse_login(username: Option<String>, password: Option<String>) -> Login {
@@ -328,74 +368,211 @@ fn cmd_install_steamcmd() -> ExitCode {
     }
 }
 
+// ── GOG commands ────────────────────────────────────────────────────
+
+fn cmd_gog_login() -> ExitCode {
+    let url = GogDl::login_url();
+    println!("Open this link in your browser and log in to GOG:\n");
+    println!("  {url}\n");
+    println!("After logging in you'll be redirected to a page.");
+    println!("Copy the URL from your browser's address bar and paste it here.\n");
+    print!("URL or code: ");
+    if std::io::stdout().flush().is_err() {
+        eprintln!("error: failed to flush stdout");
+        return ExitCode::FAILURE;
+    }
+
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        eprintln!("error: failed to read input");
+        return ExitCode::FAILURE;
+    }
+
+    let mut gog = GogDl::new();
+    match gog.login_with_code(&input) {
+        Ok(()) => {
+            match gog.refresh_token() {
+                Ok(token) => {
+                    println!("\nLogin successful!");
+                    println!("Refresh token (save this for future use):\n");
+                    println!("  {token}");
+                }
+                Err(e) => {
+                    eprintln!("error retrieving token: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_gog_search(query: &str) -> ExitCode {
+    let gog = GogDl::new();
+    match gog.search(query) {
+        Ok(products) => {
+            if products.is_empty() {
+                println!("No results found.");
+            } else {
+                for p in &products {
+                    let platforms = p.operating_systems.join(", ");
+                    println!("{:<12} {} [{}]", p.id, p.title, platforms);
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_gog_info(product_id: &str) -> ExitCode {
+    let gog = GogDl::new();
+    match gog.app_info(product_id) {
+        Ok(info) => {
+            println!("Product ID: {}", info.product_id);
+            println!("Name:       {}", info.name.as_deref().unwrap_or("unknown"));
+            println!(
+                "Build ID:   {}",
+                info.build_id.as_deref().unwrap_or("unknown")
+            );
+            let platforms = format_platforms(info.windows, info.macos, info.linux);
+            println!("Platforms:  {platforms}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_gog_owned(search: Option<&str>, page: u32, refresh_token: &str) -> ExitCode {
+    let mut gog = GogDl::new().with_refresh_token(refresh_token);
+    match gog.owned_products(search, page) {
+        Ok(products) => {
+            if products.is_empty() {
+                println!("No owned products found.");
+            } else {
+                for p in &products {
+                    let platforms = p
+                        .works_on
+                        .as_ref()
+                        .map_or_else(String::new, |w| format_platforms(w.Windows, w.Mac, w.Linux));
+                    println!("{:<12} {} [{}]", p.id, p.title, platforms);
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn read_gog_token() -> Option<String> {
+    std::env::var("GOG_REFRESH_TOKEN").ok()
+}
+
+// ── main ────────────────────────────────────────────────────────────
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Download {
+        Commands::Steam { command } => run_steam_command(command, cli.install_steamcmd),
+        Commands::Gog { command } => run_gog_command(command),
+    }
+}
+
+fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
+    match command {
+        SteamCommands::Download {
             app_id,
             dir,
             username,
             password,
             platform,
-        } => match build_depot(cli.install_steamcmd, username, password, platform) {
+        } => match build_depot(install, username, password, platform) {
             Ok(mut depot) => cmd_download(&mut depot, &app_id, &dir),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
             }
         },
-        Commands::Info {
+        SteamCommands::Info {
             app_id,
             username,
             password,
-        } => match build_depot(cli.install_steamcmd, username, password, None) {
+        } => match build_depot(install, username, password, None) {
             Ok(mut depot) => cmd_info(&mut depot, &app_id),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
             }
         },
-        Commands::Status {
+        SteamCommands::Status {
             app_id,
             username,
             password,
-        } => match build_depot(cli.install_steamcmd, username, password, None) {
+        } => match build_depot(install, username, password, None) {
             Ok(mut depot) => cmd_status(&mut depot, &app_id),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
             }
         },
-        Commands::Search { query } => cmd_search(&query),
-        Commands::List => cmd_list(),
-        Commands::Validate {
+        SteamCommands::Search { query } => cmd_search(&query),
+        SteamCommands::List => cmd_list(),
+        SteamCommands::Validate {
             app_id,
             dir,
             username,
             password,
             platform,
-        } => match build_depot(cli.install_steamcmd, username, password, platform) {
+        } => match build_depot(install, username, password, platform) {
             Ok(mut depot) => cmd_validate(&mut depot, &app_id, &dir),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
             }
         },
-        Commands::Update {
+        SteamCommands::Update {
             app_id,
             dir,
             username,
             password,
             platform,
-        } => match build_depot(cli.install_steamcmd, username, password, platform) {
+        } => match build_depot(install, username, password, platform) {
             Ok(mut depot) => cmd_update(&mut depot, &app_id, &dir),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
             }
         },
-        Commands::InstallSteamcmd => cmd_install_steamcmd(),
+        SteamCommands::InstallSteamcmd => cmd_install_steamcmd(),
+    }
+}
+
+fn run_gog_command(command: GogCommands) -> ExitCode {
+    match command {
+        GogCommands::Login => cmd_gog_login(),
+        GogCommands::Search { query } => cmd_gog_search(&query),
+        GogCommands::Info { product_id } => cmd_gog_info(&product_id),
+        GogCommands::Owned { search, page } => {
+            let Some(token) = read_gog_token() else {
+                eprintln!("error: GOG_REFRESH_TOKEN not set. Run `gamedepot gog login` first.");
+                return ExitCode::FAILURE;
+            };
+            cmd_gog_owned(search.as_deref(), page, &token)
+        }
     }
 }
 
