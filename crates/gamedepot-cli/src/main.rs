@@ -8,6 +8,7 @@ use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Input, Password};
 use gamedepot::depot::{Depot, DepotError};
 use gamedepot::gog::GogDepot;
+use gamedepot::manifest::{DepotKind, Install, Manifest};
 use gamedepot::steam::{Login, Platform, SteamDepot};
 
 use session::Session;
@@ -282,6 +283,46 @@ fn print_app_info(depot: &mut SteamDepot, app_id: &str) {
     }
 }
 
+/// Return the current time as an ISO 8601 string (UTC, second precision).
+fn now_iso8601() -> String {
+    // Use the `date` command to avoid pulling in a datetime crate.
+    std::process::Command::new("date")
+        .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .unwrap_or_default()
+}
+
+/// Record (or update) an install in the manifest.
+fn save_manifest_entry(
+    app_id: &str,
+    name: Option<&str>,
+    build_id: Option<&str>,
+    depot: DepotKind,
+    path: &Path,
+) {
+    let now = now_iso8601();
+    let abs_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut manifest = Manifest::load().unwrap_or_default();
+    let installed_at = manifest
+        .find_by_path(&abs_path)
+        .map_or_else(|| now.clone(), |i| i.installed_at.clone());
+    manifest.upsert(Install {
+        app_id: app_id.to_owned(),
+        name: name.map(String::from),
+        build_id: build_id.map(String::from),
+        depot,
+        path: abs_path,
+        installed_at,
+        updated_at: now,
+    });
+    if let Err(e) = manifest.save() {
+        eprintln!("warning: could not save manifest: {e}");
+    }
+}
+
 fn cmd_download(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
     print_app_info(depot, app_id);
     let bar = progress_bar();
@@ -292,6 +333,18 @@ fn cmd_download(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
     }) {
         Ok(()) => {
             bar.finish_with_message("done");
+            // Try to get name/build_id for the manifest.
+            let (name, build_id) = depot
+                .app_info(app_id)
+                .map(|i| (i.name, i.build_id))
+                .unwrap_or((None, None));
+            save_manifest_entry(
+                app_id,
+                name.as_deref(),
+                build_id.as_deref(),
+                DepotKind::Steam,
+                dir,
+            );
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -312,6 +365,17 @@ fn cmd_validate(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
     }) {
         Ok(()) => {
             bar.finish_with_message("done");
+            let (name, build_id) = depot
+                .app_info(app_id)
+                .map(|i| (i.name, i.build_id))
+                .unwrap_or((None, None));
+            save_manifest_entry(
+                app_id,
+                name.as_deref(),
+                build_id.as_deref(),
+                DepotKind::Steam,
+                dir,
+            );
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -332,6 +396,17 @@ fn cmd_update(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
     }) {
         Ok(()) => {
             bar.finish_with_message("done");
+            let (name, build_id) = depot
+                .app_info(app_id)
+                .map(|i| (i.name, i.build_id))
+                .unwrap_or((None, None));
+            save_manifest_entry(
+                app_id,
+                name.as_deref(),
+                build_id.as_deref(),
+                DepotKind::Steam,
+                dir,
+            );
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -360,26 +435,36 @@ fn cmd_info(depot: &mut SteamDepot, app_id: &str) -> ExitCode {
     }
 }
 
-fn cmd_status(depot: &mut SteamDepot, app_id: &str) -> ExitCode {
-    match depot.app_status(app_id) {
-        Ok(status) => {
-            println!("App ID:    {}", status.app_id);
-            println!("Name:      {}", status.name.as_deref().unwrap_or("unknown"));
-            println!("Installed: {}", status.installed);
-            println!(
-                "Build ID:  {}",
-                status.build_id.as_deref().unwrap_or("unknown")
-            );
-            if let Some(size) = status.size_on_disk {
-                println!("Size:      {size} bytes");
-            }
-            ExitCode::SUCCESS
-        }
+fn cmd_status(app_id: &str) -> ExitCode {
+    let manifest = match Manifest::load() {
+        Ok(m) => m,
         Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
+            eprintln!("error loading manifest: {e}");
+            return ExitCode::FAILURE;
         }
+    };
+    let installs = manifest.find_by_id(app_id);
+    if installs.is_empty() {
+        println!("No tracked installs for {app_id}.");
+        return ExitCode::SUCCESS;
     }
+    for install in installs {
+        println!("App ID:       {}", install.app_id);
+        println!(
+            "Name:         {}",
+            install.name.as_deref().unwrap_or("unknown")
+        );
+        println!(
+            "Build ID:     {}",
+            install.build_id.as_deref().unwrap_or("unknown")
+        );
+        println!("Depot:        {}", install.depot);
+        println!("Path:         {}", install.path.display());
+        println!("Installed at: {}", install.installed_at);
+        println!("Updated at:   {}", install.updated_at);
+        println!();
+    }
+    ExitCode::SUCCESS
 }
 
 fn cmd_search(query: &str) -> ExitCode {
@@ -648,13 +733,7 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        SteamCommands::Status { app_id } => match build_depot(install, None) {
-            Ok(mut depot) => cmd_status(&mut depot, &app_id),
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::FAILURE
-            }
-        },
+        SteamCommands::Status { app_id } => cmd_status(&app_id),
         SteamCommands::Search { query } => cmd_search(&query),
         SteamCommands::Validate {
             app_id,

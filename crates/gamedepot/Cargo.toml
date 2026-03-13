@@ -11,3 +11,4 @@ serde = { version = "1.0.228", features = ["derive"] }
 steamapi = { version = "0.1.0", path = "../steamapi" }
 steamcmd = { path = "../steamcmd" }
 thiserror = "2"
+toml = "1.0.6"
