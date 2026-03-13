@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::{AppInfo, AppStatus};
+use crate::{AppInfo, AppStatus, DownloadProgress};
 
 /// Extract quoted `"key" "value"` pairs from steamcmd VDF-like output.
 pub(crate) fn extract_kv_pairs(text: &str) -> HashMap<String, String> {
@@ -45,4 +45,38 @@ pub(crate) fn parse_app_status(app_id: &str, stdout: &str) -> AppStatus {
         state_flags: kv.get("StateFlags").and_then(|v| v.parse().ok()),
         update_success: kv.get("UpdateResult").map(|v| v == "0"),
     }
+}
+
+/// Try to parse a steamcmd progress line into a [`DownloadProgress`].
+///
+/// Expected format:
+/// ` Update state (0x61) downloading, progress: 20.00 (193343132 / 966663354)`
+pub(crate) fn parse_progress(line: &str) -> Option<DownloadProgress> {
+    let trimmed = line.trim();
+
+    // Must start with "Update state"
+    let rest = trimmed.strip_prefix("Update state")?;
+
+    // Extract state name: everything between ") " and ","
+    let after_paren = rest.split(") ").nth(1)?;
+    let (state, after_state) = after_paren.split_once(',')?;
+    let state = state.trim().to_string();
+
+    // Extract percent: "progress: XX.XX"
+    let after_progress = after_state.strip_prefix(" progress: ")?;
+    let (pct_str, rest) = after_progress.split_once(' ')?;
+    let percent: f64 = pct_str.parse().ok()?;
+
+    // Extract bytes: "(current / total)"
+    let inner = rest.trim_start_matches('(').trim_end_matches(')').trim();
+    let (current_str, total_str) = inner.split_once(" / ")?;
+    let current_bytes: u64 = current_str.trim().parse().ok()?;
+    let total_bytes: u64 = total_str.trim().parse().ok()?;
+
+    Some(DownloadProgress {
+        state,
+        percent,
+        current_bytes,
+        total_bytes,
+    })
 }

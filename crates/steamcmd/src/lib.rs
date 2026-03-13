@@ -12,6 +12,19 @@ pub use runner::Session;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Structured progress update from a download or update operation.
+#[derive(Debug, Clone)]
+pub struct DownloadProgress {
+    /// Current phase (e.g. `"downloading"`, `"verifying update"`).
+    pub state: String,
+    /// Completion percentage (0.0–100.0).
+    pub percent: f64,
+    /// Bytes processed so far.
+    pub current_bytes: u64,
+    /// Total bytes expected.
+    pub total_bytes: u64,
+}
+
 /// Target platform for downloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
@@ -205,8 +218,8 @@ impl SteamCmd {
         self.download_with_progress(app_id, install_dir, validate, |_| {})
     }
 
-    /// Download or update an app, calling `on_line` for each output
-    /// line as it arrives (useful for progress reporting).
+    /// Download or update an app, calling `on_progress` for each
+    /// parsed progress update as it arrives.
     ///
     /// # Errors
     ///
@@ -216,7 +229,7 @@ impl SteamCmd {
         app_id: &str,
         install_dir: &Path,
         validate: bool,
-        on_line: impl FnMut(&str),
+        mut on_progress: impl FnMut(&DownloadProgress),
     ) -> Result<(), SteamCmdError> {
         let mut session = self.session()?;
         session.run_command(&format!(
@@ -224,8 +237,14 @@ impl SteamCmd {
             install_dir.to_string_lossy()
         ))?;
         let validate_flag = if validate { " -validate" } else { "" };
-        session
-            .run_command_with_callback(&format!("app_update {app_id}{validate_flag}"), on_line)?;
+        session.run_command_with_callback(
+            &format!("app_update {app_id}{validate_flag}"),
+            |line| {
+                if let Some(progress) = parse::parse_progress(line) {
+                    on_progress(&progress);
+                }
+            },
+        )?;
         session.quit()
     }
 

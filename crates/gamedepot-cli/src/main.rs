@@ -149,9 +149,32 @@ fn build_depot(
     Ok(depot)
 }
 
+#[expect(clippy::cast_precision_loss)]
+fn format_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 fn cmd_download(depot: &SteamDepot, app_id: &str, dir: &Path, validate: bool) -> ExitCode {
-    match depot.download_with_progress(app_id, dir, validate, |line| {
-        print!("{line}");
+    match depot.download_with_progress(app_id, dir, validate, |p| {
+        println!(
+            "{}: {:.1}% ({} / {})",
+            p.state,
+            p.percent,
+            format_bytes(p.current_bytes),
+            format_bytes(p.total_bytes),
+        );
     }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

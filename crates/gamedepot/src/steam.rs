@@ -99,10 +99,10 @@ impl SteamDepot {
         app_id: &str,
         install_dir: &Path,
         validate: bool,
-        on_line: impl FnMut(&str),
+        on_progress: impl FnMut(&steamcmd::DownloadProgress),
     ) -> Result<(), DepotError> {
         self.cmd
-            .download_with_progress(app_id, install_dir, validate, on_line)
+            .download_with_progress(app_id, install_dir, validate, on_progress)
             .map_err(map_err)
     }
 }
