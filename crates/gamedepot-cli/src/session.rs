@@ -30,6 +30,12 @@ pub struct GogSession {
 pub struct SteamSession {
     /// Steam Web API key.
     pub api_key: Option<String>,
+    /// `SteamCMD` username.
+    pub username: Option<String>,
+    /// `SteamCMD` password (stored in plaintext — steamcmd requires it).
+    pub password: Option<String>,
+    /// 64-bit Steam ID (resolved from vanity URL on login).
+    pub steam_id: Option<String>,
 }
 
 impl Session {

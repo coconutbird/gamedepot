@@ -38,6 +38,8 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum SteamCommands {
+    /// Save Steam credentials (API key, username/password, Steam ID).
+    Login,
     /// Download or update a game.
     Download {
         /// App ID to download.
@@ -45,12 +47,6 @@ enum SteamCommands {
         /// Directory to install into.
         #[arg(short, long)]
         dir: PathBuf,
-        /// Steam username (omit for anonymous).
-        #[arg(short, long)]
-        username: Option<String>,
-        /// Steam password.
-        #[arg(short, long)]
-        password: Option<String>,
         /// Target platform override.
         #[arg(long)]
         platform: Option<String>,
@@ -59,23 +55,11 @@ enum SteamCommands {
     Info {
         /// App ID to query.
         app_id: String,
-        /// Steam username (omit for anonymous).
-        #[arg(short, long)]
-        username: Option<String>,
-        /// Steam password.
-        #[arg(short, long)]
-        password: Option<String>,
     },
     /// Check local install status.
     Status {
         /// App ID to check.
         app_id: String,
-        /// Steam username (omit for anonymous).
-        #[arg(short, long)]
-        username: Option<String>,
-        /// Steam password.
-        #[arg(short, long)]
-        password: Option<String>,
     },
     /// Search the Steam store for games.
     Search {
@@ -89,12 +73,6 @@ enum SteamCommands {
         /// Directory where the game is installed.
         #[arg(short, long)]
         dir: PathBuf,
-        /// Steam username (omit for anonymous).
-        #[arg(short, long)]
-        username: Option<String>,
-        /// Steam password.
-        #[arg(short, long)]
-        password: Option<String>,
         /// Target platform override.
         #[arg(long)]
         platform: Option<String>,
@@ -106,20 +84,14 @@ enum SteamCommands {
         /// Directory where the game is installed.
         #[arg(short, long)]
         dir: PathBuf,
-        /// Steam username (omit for anonymous).
-        #[arg(short, long)]
-        username: Option<String>,
-        /// Steam password.
-        #[arg(short, long)]
-        password: Option<String>,
         /// Target platform override.
         #[arg(long)]
         platform: Option<String>,
     },
-    /// List games you own (requires Steam API key).
+    /// List games you own (requires login).
     Owned {
-        /// Steam ID or vanity URL name.
-        steam_id: String,
+        /// Steam ID or vanity URL name (uses saved ID if omitted).
+        steam_id: Option<String>,
     },
     /// Download and install `SteamCMD` to ~/steamcmd.
     InstallSteamcmd,
@@ -150,16 +122,6 @@ enum GogCommands {
     },
 }
 
-fn parse_login(username: Option<String>, password: Option<String>) -> Login {
-    match (username, password) {
-        (Some(u), Some(p)) => Login::Credentials {
-            username: u,
-            password: p,
-        },
-        _ => Login::Anonymous,
-    }
-}
-
 fn parse_platform(platform: Option<String>) -> Option<Platform> {
     platform.map(|p| match p.to_lowercase().as_str() {
         "windows" | "win" => Platform::Windows,
@@ -180,18 +142,108 @@ fn get_depot(install: bool) -> Result<SteamDepot, DepotError> {
     }
 }
 
-fn build_depot(
-    install: bool,
-    username: Option<String>,
-    password: Option<String>,
-    platform: Option<String>,
-) -> Result<SteamDepot, DepotError> {
-    let login = parse_login(username, password);
+/// Build a `SteamDepot` with credentials from the session file.
+fn build_depot(install: bool, platform: Option<String>) -> Result<SteamDepot, DepotError> {
+    let session =
+        Session::load().map_err(|e| DepotError::Other(format!("failed to load session: {e}")))?;
+    let login = match (session.steam.username, session.steam.password) {
+        (Some(u), Some(p)) => Login::Credentials {
+            username: u,
+            password: p,
+        },
+        _ => Login::Anonymous,
+    };
     let mut depot = get_depot(install)?.with_login(login);
     if let Some(p) = parse_platform(platform) {
         depot = depot.with_platform(p);
     }
     Ok(depot)
+}
+
+/// Prompt the user for a line of input.
+fn prompt(label: &str) -> String {
+    print!("{label}");
+    std::io::stdout().flush().ok();
+    let mut buf = String::new();
+    std::io::stdin().read_line(&mut buf).unwrap_or_default();
+    buf.trim().to_string()
+}
+
+/// Prompt for a line of input without echoing (for passwords).
+fn prompt_password(label: &str) -> String {
+    print!("{label}");
+    std::io::stdout().flush().ok();
+    rpassword::read_password().unwrap_or_default()
+}
+
+fn cmd_steam_login() -> ExitCode {
+    println!("Steam login — saves credentials to ~/.gamedepot/session.toml\n");
+
+    let api_key = prompt("Steam Web API key (https://steamcommunity.com/dev/apikey): ");
+    let username = prompt("Steam username: ");
+    let password = prompt_password("Steam password: ");
+    let steam_id_input = prompt("Steam ID or vanity URL name: ");
+
+    // Resolve vanity URL to a 64-bit Steam ID if needed.
+    let steam_id = if api_key.is_empty() {
+        if steam_id_input.is_empty() {
+            None
+        } else {
+            Some(steam_id_input)
+        }
+    } else {
+        let depot = SteamDepot::api_only().with_api_key(&api_key);
+        if steam_id_input.is_empty() {
+            None
+        } else if steam_id_input.len() == 17 && steam_id_input.chars().all(|c| c.is_ascii_digit()) {
+            Some(steam_id_input)
+        } else {
+            match depot.resolve_vanity_url(&steam_id_input) {
+                Ok(id) => {
+                    println!("Resolved vanity URL to Steam ID: {id}");
+                    Some(id)
+                }
+                Err(e) => {
+                    eprintln!("warning: could not resolve vanity URL: {e}");
+                    eprintln!("         saving raw input as steam_id");
+                    Some(steam_id_input)
+                }
+            }
+        }
+    };
+
+    let mut session = Session::load().unwrap_or_default();
+    session.steam.api_key = if api_key.is_empty() {
+        None
+    } else {
+        Some(api_key)
+    };
+    session.steam.username = if username.is_empty() {
+        None
+    } else {
+        Some(username)
+    };
+    session.steam.password = if password.is_empty() {
+        None
+    } else {
+        Some(password)
+    };
+    session.steam.steam_id = steam_id;
+
+    match session.save() {
+        Ok(()) => {
+            let path = Session::path().map_or_else(
+                |_| "~/.gamedepot/session.toml".into(),
+                |p| p.display().to_string(),
+            );
+            println!("\nSaved to {path}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error saving session: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn progress_bar() -> indicatif::ProgressBar {
@@ -498,6 +550,11 @@ fn read_steam_api_key() -> Option<String> {
     Session::load().ok().and_then(|s| s.steam.api_key)
 }
 
+/// Read the saved Steam ID from the session file.
+fn read_steam_id() -> Option<String> {
+    Session::load().ok().and_then(|s| s.steam.steam_id)
+}
+
 fn cmd_steam_owned(api_key: &str, steam_id_or_vanity: &str) -> ExitCode {
     let depot = SteamDepot::api_only().with_api_key(api_key);
 
@@ -552,35 +609,26 @@ fn main() -> ExitCode {
 
 fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
     match command {
+        SteamCommands::Login => cmd_steam_login(),
         SteamCommands::Download {
             app_id,
             dir,
-            username,
-            password,
             platform,
-        } => match build_depot(install, username, password, platform) {
+        } => match build_depot(install, platform) {
             Ok(mut depot) => cmd_download(&mut depot, &app_id, &dir),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
             }
         },
-        SteamCommands::Info {
-            app_id,
-            username,
-            password,
-        } => match build_depot(install, username, password, None) {
+        SteamCommands::Info { app_id } => match build_depot(install, None) {
             Ok(mut depot) => cmd_info(&mut depot, &app_id),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
             }
         },
-        SteamCommands::Status {
-            app_id,
-            username,
-            password,
-        } => match build_depot(install, username, password, None) {
+        SteamCommands::Status { app_id } => match build_depot(install, None) {
             Ok(mut depot) => cmd_status(&mut depot, &app_id),
             Err(e) => {
                 eprintln!("error: {e}");
@@ -591,10 +639,8 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
         SteamCommands::Validate {
             app_id,
             dir,
-            username,
-            password,
             platform,
-        } => match build_depot(install, username, password, platform) {
+        } => match build_depot(install, platform) {
             Ok(mut depot) => cmd_validate(&mut depot, &app_id, &dir),
             Err(e) => {
                 eprintln!("error: {e}");
@@ -604,10 +650,8 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
         SteamCommands::Update {
             app_id,
             dir,
-            username,
-            password,
             platform,
-        } => match build_depot(install, username, password, platform) {
+        } => match build_depot(install, platform) {
             Ok(mut depot) => cmd_update(&mut depot, &app_id, &dir),
             Err(e) => {
                 eprintln!("error: {e}");
@@ -616,10 +660,12 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
         },
         SteamCommands::Owned { steam_id } => {
             let Some(api_key) = read_steam_api_key() else {
-                eprintln!(
-                    "error: STEAM_API_KEY not set. \
-                     Get one at https://steamcommunity.com/dev/apikey"
-                );
+                eprintln!("error: no API key. Run `gamedepot steam login` or set STEAM_API_KEY.");
+                return ExitCode::FAILURE;
+            };
+            let steam_id = steam_id.or_else(read_steam_id);
+            let Some(steam_id) = steam_id else {
+                eprintln!("error: no Steam ID. Run `gamedepot steam login` or pass a Steam ID.");
                 return ExitCode::FAILURE;
             };
             cmd_steam_owned(&api_key, &steam_id)

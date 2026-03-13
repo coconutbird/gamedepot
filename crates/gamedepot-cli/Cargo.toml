@@ -8,5 +8,6 @@ description = "CLI tool for downloading Steam and GOG games"
 clap = { version = "4.6.0", features = ["derive"] }
 gamedepot = { path = "../gamedepot" }
 indicatif = "0.18.4"
+rpassword = "7.4.0"
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.0.6"
