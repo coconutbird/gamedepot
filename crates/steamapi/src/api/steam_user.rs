@@ -22,9 +22,7 @@ impl SteamApi {
             "{API_BASE}/ISteamUser/GetPlayerSummaries/v0002/\
              ?key={key}&steamids={ids}&format=json",
         );
-        let body = get(&url)?;
-        let envelope: PlayerSummariesEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: PlayerSummariesEnvelope = get(&url)?;
         Ok(envelope.response.players)
     }
 
@@ -59,9 +57,7 @@ impl SteamApi {
             "{API_BASE}/ISteamUser/GetFriendList/v0001/\
              ?key={key}&steamid={steam_id}&relationship={relationship}&format=json",
         );
-        let body = get(&url)?;
-        let envelope: FriendListEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: FriendListEnvelope = get(&url)?;
         Ok(envelope.friendslist.friends)
     }
 
@@ -78,9 +74,7 @@ impl SteamApi {
             "{API_BASE}/ISteamUser/GetPlayerBans/v1/\
              ?key={key}&steamids={ids}&format=json",
         );
-        let body = get(&url)?;
-        let envelope: PlayerBansEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: PlayerBansEnvelope = get(&url)?;
         Ok(envelope.players)
     }
 
@@ -98,9 +92,7 @@ impl SteamApi {
             "{API_BASE}/ISteamUser/ResolveVanityURL/v0001/\
              ?key={key}&vanityurl={vanity_name}&format=json",
         );
-        let body = get(&url)?;
-        let envelope: VanityEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: VanityEnvelope = get(&url)?;
         if envelope.response.success == 1 {
             envelope
                 .response

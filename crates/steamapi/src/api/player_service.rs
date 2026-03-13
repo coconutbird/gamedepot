@@ -31,9 +31,7 @@ impl SteamApi {
              &format=json",
             u8::from(include_appinfo),
         );
-        let body = get(&url)?;
-        let envelope: OwnedGamesEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: OwnedGamesEnvelope = get(&url)?;
         Ok(envelope.response.games)
     }
 
@@ -59,9 +57,7 @@ impl SteamApi {
         if let Some(c) = count {
             let _ = write!(url, "&count={c}");
         }
-        let body = get(&url)?;
-        let envelope: RecentlyPlayedEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: RecentlyPlayedEnvelope = get(&url)?;
         Ok(envelope.response.games)
     }
 
@@ -77,9 +73,7 @@ impl SteamApi {
             "{API_BASE}/IPlayerService/GetSteamLevel/v1/\
              ?key={key}&steamid={steam_id}&format=json",
         );
-        let body = get(&url)?;
-        let envelope: SteamLevelEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: SteamLevelEnvelope = get(&url)?;
         Ok(envelope.response.player_level)
     }
 }

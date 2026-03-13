@@ -28,9 +28,7 @@ impl SteamApi {
             "{API_BASE}/ISteamNews/GetNewsForApp/v0002/\
              ?appid={app_id}&count={count}&maxlength={max_length}&format=json",
         );
-        let body = get(&url)?;
-        let envelope: NewsEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: NewsEnvelope = get(&url)?;
         Ok(envelope.appnews.newsitems)
     }
 }

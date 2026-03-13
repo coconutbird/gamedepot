@@ -26,9 +26,7 @@ impl SteamApi {
             "{API_BASE}/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v0002/\
              ?gameid={app_id}&format=json",
         );
-        let body = get(&url)?;
-        let envelope: GlobalAchievementsEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: GlobalAchievementsEnvelope = get(&url)?;
         Ok(envelope.achievementpercentages.achievements)
     }
 
@@ -52,9 +50,7 @@ impl SteamApi {
         if let Some(lang) = language {
             let _ = write!(url, "&l={lang}");
         }
-        let body = get(&url)?;
-        let envelope: PlayerAchievementsEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: PlayerAchievementsEnvelope = get(&url)?;
         Ok(envelope.playerstats.achievements)
     }
 
@@ -74,9 +70,7 @@ impl SteamApi {
             "{API_BASE}/ISteamUserStats/GetUserStatsForGame/v0002/\
              ?appid={app_id}&key={key}&steamid={steam_id}&format=json",
         );
-        let body = get(&url)?;
-        let envelope: UserStatsEnvelope =
-            serde_json::from_str(&body).map_err(|e| SteamError::Parse(e.to_string()))?;
+        let envelope: UserStatsEnvelope = get(&url)?;
         Ok(envelope.playerstats.stats)
     }
 }
