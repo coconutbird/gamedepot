@@ -1,10 +1,11 @@
 mod session;
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use dialoguer::theme::ColorfulTheme;
+use dialoguer::{Input, Password};
 use gamedepot::depot::{Depot, DepotError};
 use gamedepot::gog::GogDepot;
 use gamedepot::steam::{Login, Platform, SteamDepot};
@@ -161,28 +162,34 @@ fn build_depot(install: bool, platform: Option<String>) -> Result<SteamDepot, De
 }
 
 /// Prompt the user for a line of input.
-fn prompt(label: &str) -> String {
-    print!("{label}");
-    std::io::stdout().flush().ok();
-    let mut buf = String::new();
-    std::io::stdin().read_line(&mut buf).unwrap_or_default();
-    buf.trim().to_string()
-}
-
-/// Prompt for a line of input without echoing (for passwords).
-fn prompt_password(label: &str) -> String {
-    print!("{label}");
-    std::io::stdout().flush().ok();
-    rpassword::read_password().unwrap_or_default()
-}
-
 fn cmd_steam_login() -> ExitCode {
+    let theme = ColorfulTheme::default();
+
     println!("Steam login — saves credentials to ~/.gamedepot/session.toml\n");
 
-    let api_key = prompt("Steam Web API key (https://steamcommunity.com/dev/apikey): ");
-    let username = prompt("Steam username: ");
-    let password = prompt_password("Steam password: ");
-    let steam_id_input = prompt("Steam ID or vanity URL name: ");
+    let api_key: String = Input::with_theme(&theme)
+        .with_prompt("Steam Web API key (https://steamcommunity.com/dev/apikey)")
+        .allow_empty(true)
+        .interact_text()
+        .unwrap_or_default();
+
+    let username: String = Input::with_theme(&theme)
+        .with_prompt("Steam username")
+        .allow_empty(true)
+        .interact_text()
+        .unwrap_or_default();
+
+    let password: String = Password::with_theme(&theme)
+        .with_prompt("Steam password")
+        .allow_empty_password(true)
+        .interact()
+        .unwrap_or_default();
+
+    let steam_id_input: String = Input::with_theme(&theme)
+        .with_prompt("Steam ID or vanity URL name")
+        .allow_empty(true)
+        .interact_text()
+        .unwrap_or_default();
 
     // Resolve vanity URL to a 64-bit Steam ID if needed.
     let steam_id = if api_key.is_empty() {
@@ -405,22 +412,18 @@ fn cmd_install_steamcmd() -> ExitCode {
 // ── GOG commands ────────────────────────────────────────────────────
 
 fn cmd_gog_login() -> ExitCode {
+    let theme = ColorfulTheme::default();
     let url = GogDepot::login_url();
+
     println!("Open this link in your browser and log in to GOG:\n");
     println!("  {url}\n");
     println!("After logging in you'll be redirected to a page.");
     println!("Copy the URL from your browser's address bar and paste it here.\n");
-    print!("URL or code: ");
-    if std::io::stdout().flush().is_err() {
-        eprintln!("error: failed to flush stdout");
-        return ExitCode::FAILURE;
-    }
 
-    let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() {
-        eprintln!("error: failed to read input");
-        return ExitCode::FAILURE;
-    }
+    let input: String = Input::with_theme(&theme)
+        .with_prompt("URL or code")
+        .interact_text()
+        .unwrap_or_default();
 
     let mut gog = GogDepot::new();
     if let Err(e) = gog.login_with_code(&input) {
