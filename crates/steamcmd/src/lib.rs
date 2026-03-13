@@ -152,6 +152,13 @@ impl AppStatus {
 /// The session is spawned on the first command that needs it and
 /// kept alive until the `SteamCmd` is dropped (or [`quit`](Self::quit)
 /// is called explicitly).
+///
+/// # Thread safety
+///
+/// All session-backed methods require `&mut self`, so the borrow
+/// checker prevents concurrent use at compile time.  The underlying
+/// child process communicates over raw stdin/stdout pipes that are
+/// **not** safe to share across threads.
 pub struct SteamCmd {
     path: PathBuf,
     login: Login,
