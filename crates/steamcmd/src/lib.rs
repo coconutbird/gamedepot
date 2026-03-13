@@ -291,6 +291,20 @@ impl SteamCmd {
         Ok(())
     }
 
+    /// Get the 64-bit Steam ID of the currently logged-in user.
+    ///
+    /// Runs the `info` command and parses the `SteamID` field from the
+    /// output (format `[U:1:XXXXX]`), converting it to a 64-bit ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session cannot be started, the `info`
+    /// command fails, or the Steam ID cannot be parsed from the output.
+    pub fn steam_id(&mut self) -> Result<String, SteamCmdError> {
+        let output = self.session()?.run_command("info")?;
+        parse_steam_id(&output)
+    }
+
     /// Download or update an app.
     ///
     /// # Errors
@@ -384,5 +398,57 @@ impl SteamCmd {
         let session = self.session()?;
         let output = session.run_command(&format!("app_status {app_id}"))?;
         Ok(parse::parse_app_status(app_id, &output))
+    }
+}
+
+/// The base value added to a Steam3 account ID to get a 64-bit Steam ID.
+const STEAM_ID_BASE: u64 = 76_561_197_960_265_728;
+
+/// Parse a 64-bit Steam ID from steamcmd `info` output.
+///
+/// Looks for `SteamID:` followed by a Steam3 ID like `[U:1:12345678]`
+/// and converts it to a 64-bit ID (`76561198012345678`).
+fn parse_steam_id(output: &str) -> Result<String, SteamCmdError> {
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("SteamID:") {
+            let rest = rest.trim();
+            // Parse [U:1:XXXXX] format
+            if let Some(inner) = rest.strip_prefix("[U:1:").and_then(|s| s.strip_suffix(']')) {
+                let account_id: u64 = inner.parse().map_err(|_| {
+                    SteamCmdError::Other(format!("failed to parse account ID: {inner}"))
+                })?;
+                return Ok((STEAM_ID_BASE + account_id).to_string());
+            }
+            return Err(SteamCmdError::Other(format!(
+                "unexpected SteamID format: {rest}"
+            )));
+        }
+    }
+    Err(SteamCmdError::Other(
+        "SteamID not found in info output".into(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_steam_id_from_info_output() {
+        let output = "\
+Account: coconutbird
+SteamID: [U:1:52079950]
+Email: test@example.com
+Logon state: Logged On
+";
+        let id = parse_steam_id(output).unwrap();
+        assert_eq!(id, "76561198012345678");
+    }
+
+    #[test]
+    fn parse_steam_id_missing() {
+        let output = "Account: coconutbird\nLogon state: Logged On\n";
+        assert!(parse_steam_id(output).is_err());
     }
 }
