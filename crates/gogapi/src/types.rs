@@ -17,7 +17,7 @@ pub struct CatalogResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogProduct {
-    pub id: u64,
+    pub id: String,
     pub slug: String,
     pub title: String,
     pub product_type: String,
@@ -45,7 +45,7 @@ pub struct CatalogPrice {
 /// Response from the product details API.
 #[derive(Debug, Deserialize)]
 pub struct ProductResponse {
-    pub id: u64,
+    pub id: String,
     pub title: String,
     pub slug: String,
     #[serde(default)]
@@ -148,7 +148,7 @@ pub struct OwnedProductsResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnedProduct {
-    pub id: u64,
+    pub id: String,
     pub title: String,
     pub slug: String,
     #[serde(default)]

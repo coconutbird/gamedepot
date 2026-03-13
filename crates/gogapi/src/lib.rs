@@ -179,7 +179,7 @@ impl GogDl {
         let build_id = self.latest_build_id(product_id);
 
         Ok(AppInfo {
-            product_id: product.id.to_string(),
+            product_id: product.id,
             name: Some(product.title),
             build_id,
             windows,
