@@ -1,20 +1,23 @@
 // Process execution — spawns steamcmd and captures output.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
 use crate::error::SteamCmdError;
 use crate::{Login, Platform};
 
+/// The prompt string steamcmd prints when ready for input.
+const PROMPT: &str = "Steam>";
+
 /// A long-lived steamcmd session.
 ///
 /// Spawns the steamcmd process once, handles login, and then accepts
-/// commands via stdin. Output is read from stdout line-by-line until
-/// the `Steam>` prompt reappears, indicating the command has finished.
+/// commands via stdin. Output is read byte-by-byte until the `Steam>`
+/// prompt appears, indicating the command has finished.
 pub struct Session {
     child: Child,
-    reader: BufReader<std::process::ChildStdout>,
+    stdout: std::process::ChildStdout,
 }
 
 impl Session {
@@ -60,9 +63,7 @@ impl Session {
             .take()
             .ok_or_else(|| SteamCmdError::Other("failed to capture stdout".into()))?;
 
-        let reader = BufReader::new(stdout);
-
-        let mut session = Self { child, reader };
+        let mut session = Self { child, stdout };
 
         // Read until the first prompt — this consumes the login output.
         let _login_output = session.read_until_prompt()?;
@@ -106,34 +107,34 @@ impl Session {
         Ok(())
     }
 
-    /// Read lines from stdout until we see the `Steam>` prompt.
+    /// Read bytes from stdout until we see the `Steam>` prompt.
+    ///
+    /// Returns everything before the prompt. The prompt itself is
+    /// consumed but not included in the output.
     fn read_until_prompt(&mut self) -> Result<String, SteamCmdError> {
-        let mut output = String::new();
-        let mut line = String::new();
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        let prompt_bytes = PROMPT.as_bytes();
 
         loop {
-            line.clear();
-            let bytes_read = self
-                .reader
-                .read_line(&mut line)
-                .map_err(SteamCmdError::Io)?;
-
-            if bytes_read == 0 {
+            let n = self.stdout.read(&mut byte).map_err(SteamCmdError::Io)?;
+            if n == 0 {
                 // EOF — process exited.
                 break;
             }
+            buf.push(byte[0]);
 
-            let trimmed = line.trim();
-
-            // The steamcmd prompt is "Steam>" at the start of a line.
-            if trimmed == "Steam>" || trimmed.ends_with("Steam>") {
+            // Check if the buffer ends with the prompt.
+            if buf.len() >= prompt_bytes.len()
+                && buf[buf.len() - prompt_bytes.len()..] == *prompt_bytes
+            {
+                // Remove the prompt from the output.
+                buf.truncate(buf.len() - prompt_bytes.len());
                 break;
             }
-
-            output.push_str(&line);
         }
 
-        Ok(output)
+        Ok(String::from_utf8_lossy(&buf).into_owned())
     }
 }
 
