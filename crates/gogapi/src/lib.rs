@@ -1,3 +1,4 @@
+#![allow(clippy::missing_errors_doc)]
 // GOG game downloader using the GOG REST API.
 
 pub mod api;
@@ -44,6 +45,21 @@ pub struct DownloadProgress {
     pub current_bytes: u64,
     /// Total bytes expected.
     pub total_bytes: u64,
+}
+
+/// Progress update during file verification.
+#[derive(Debug, Clone)]
+pub struct VerifyProgress {
+    /// Number of files checked so far.
+    pub checked: u64,
+    /// Total number of files to check.
+    pub total: u64,
+    /// Number of files that passed verification.
+    pub valid: u64,
+    /// Number of files that need re-downloading.
+    pub invalid: u64,
+    /// The file currently being checked (if any).
+    pub current_file: Option<String>,
 }
 
 /// Information about a GOG product.
@@ -222,18 +238,202 @@ impl GogDl {
     }
 
     /// Return the current refresh token (it rotates on every exchange).
-    ///
-    /// Useful for persisting the latest token to disk so the user
-    /// doesn't have to re-authenticate.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if no token store is configured.
     pub fn refresh_token(&self) -> Result<&str, GogError> {
         self.token_store
             .as_ref()
             .map(auth::TokenStore::refresh_token)
             .ok_or_else(|| GogError::AuthRequired("no refresh token configured".into()))
+    }
+
+    /// Fetch full product info with all expand fields.
+    pub fn product_info_full(
+        &self,
+        product_id: &str,
+    ) -> Result<types::ProductResponseFull, GogError> {
+        self.client.product_info_full(product_id)
+    }
+
+    /// Fetch multiple products at once (up to 50).
+    pub fn products_batch(&self, ids: &[&str]) -> Result<Vec<types::ProductResponse>, GogError> {
+        self.client.products_batch(ids)
+    }
+
+    /// Get a secure download URL for an installer file.
+    pub fn downlink(
+        &mut self,
+        product_id: &str,
+        dl_path: &str,
+    ) -> Result<types::DownlinkResponse, GogError> {
+        self.ensure_authed()?;
+        self.client.downlink(product_id, dl_path)
+    }
+
+    /// Fetch user profile information.
+    pub fn user_info(&mut self, user_id: &str) -> Result<types::UserInfo, GogError> {
+        self.ensure_authed()?;
+        self.client.user_info(user_id)
+    }
+
+    /// Fetch the friends list for a user.
+    pub fn friends(&mut self, user_id: &str) -> Result<types::FriendsResponse, GogError> {
+        self.ensure_authed()?;
+        self.client.friends(user_id)
+    }
+
+    /// Fetch achievements for a product and user.
+    pub fn achievements(
+        &mut self,
+        product_id: &str,
+        user_id: &str,
+    ) -> Result<types::AchievementsResponse, GogError> {
+        self.ensure_authed()?;
+        self.client.achievements(product_id, user_id)
+    }
+
+    /// Set the user as online.
+    pub fn set_online(&mut self, user_id: &str) -> Result<(), GogError> {
+        self.ensure_authed()?;
+        self.client.set_online(user_id)
+    }
+
+    /// Check which users from a list are currently online.
+    pub fn statuses(&mut self, user_ids: &[&str]) -> Result<types::StatusesResponse, GogError> {
+        self.ensure_authed()?;
+        self.client.statuses(user_ids)
+    }
+
+    /// Fetch the Galaxy client configuration (no auth needed).
+    pub fn galaxy_config() -> Result<types::GalaxyConfig, GogError> {
+        api::Client::galaxy_config()
+    }
+
+    /// Resolve all files for a product into download-ready metadata.
+    ///
+    /// Fetches the latest V2 build, resolves depot manifests, obtains
+    /// authenticated CDN URLs, and returns a flat list of files with
+    /// pre-built chunk URLs. No data is downloaded or written to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if auth fails, no builds are available, or
+    /// any manifest fetch fails.
+    pub fn resolve_files(
+        &mut self,
+        product_id: &str,
+        language: &str,
+    ) -> Result<Vec<types::ResolvedFile>, GogError> {
+        self.ensure_authed()?;
+
+        let os = self
+            .platform
+            .ok_or_else(|| GogError::Other("no platform set".into()))?
+            .as_gog_str();
+
+        // 1. Get the latest V2 build.
+        let builds = self.client.builds(product_id, os)?;
+        let build = builds
+            .items
+            .iter()
+            .find(|b| b.generation == 2)
+            .ok_or_else(|| GogError::NotFound("no V2 build available".into()))?;
+        let link = build
+            .link
+            .as_deref()
+            .ok_or_else(|| GogError::NotFound("build has no manifest link".into()))?;
+
+        // 2. Fetch the repository manifest.
+        let repo = self.client.v2_repository(link)?;
+
+        // 3. Filter depots by language (include "*" = neutral).
+        let matching_depots: Vec<_> = repo
+            .depots
+            .iter()
+            .filter(|d| d.languages.iter().any(|l| l == "*" || l == language))
+            .collect();
+
+        if matching_depots.is_empty() {
+            return Err(GogError::NotFound(format!(
+                "no depots for language '{language}'"
+            )));
+        }
+
+        // 4. Get authenticated CDN URLs via secure_link (one per product_id).
+        let mut secure_urls: std::collections::HashMap<String, types::SecureUrl> =
+            std::collections::HashMap::new();
+        for depot_entry in &matching_depots {
+            if !secure_urls.contains_key(&depot_entry.product_id) {
+                let sl = self.client.secure_link(&depot_entry.product_id)?;
+                if let Some(first) = sl.urls.into_iter().next() {
+                    secure_urls.insert(depot_entry.product_id.clone(), first);
+                }
+            }
+        }
+
+        // 5. Walk depot manifests and build resolved file list.
+        let mut files = Vec::new();
+        for depot_entry in &matching_depots {
+            let manifest = self.client.v2_depot_manifest(&depot_entry.manifest)?;
+            let secure = secure_urls.get(&depot_entry.product_id);
+
+            for item in manifest.depot.items {
+                if item.item_type != "DepotFile" || item.chunks.is_empty() {
+                    continue;
+                }
+
+                let path = item.path.replace('\\', "/");
+                let chunks = item
+                    .chunks
+                    .iter()
+                    .map(|c| {
+                        let galaxy = api::Client::galaxy_path(&c.compressed_md5);
+                        let url = secure
+                            .map(|s| s.build_chunk_url(&galaxy))
+                            .unwrap_or_default();
+                        types::ResolvedChunk {
+                            url,
+                            compressed_size: c.compressed_size,
+                            size: c.size,
+                            md5: c.md5.clone(),
+                            compressed_md5: c.compressed_md5.clone(),
+                        }
+                    })
+                    .collect();
+
+                files.push(types::ResolvedFile {
+                    rel_path: path,
+                    md5: item.md5,
+                    chunks,
+                });
+            }
+        }
+
+        Ok(files)
+    }
+
+    /// Download and decompress a single chunk.
+    ///
+    /// Fetches the compressed data from the CDN, decompresses it with
+    /// zlib, and returns the raw bytes. The caller is responsible for
+    /// parallelism, ordering, and writing to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request or decompression fails.
+    pub fn download_chunk(chunk: &types::ResolvedChunk) -> Result<Vec<u8>, GogError> {
+        use flate2::read::ZlibDecoder;
+        use std::io::Read;
+
+        let compressed = api::download_chunk(&chunk.url)?;
+
+        let mut decoder = ZlibDecoder::new(&compressed[..]);
+        #[allow(clippy::cast_possible_truncation)]
+        let chunk_len = chunk.size as usize;
+        let mut buf = vec![0u8; chunk_len];
+        decoder
+            .read_exact(&mut buf)
+            .map_err(|e| GogError::Other(format!("chunk decompression failed: {e}")))?;
+
+        Ok(buf)
     }
 
     /// Get the latest build ID for the configured platform, if any.

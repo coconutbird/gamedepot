@@ -106,6 +106,20 @@ enum SteamCommands {
 enum GogCommands {
     /// Log in to GOG via browser-based `OAuth2`.
     Login,
+    /// Download a GOG game.
+    Download {
+        /// Product ID to download.
+        id: String,
+        /// Override install directory.
+        #[arg(short, long)]
+        dir: Option<PathBuf>,
+        /// Target platform (windows, mac, linux).
+        #[arg(short, long)]
+        platform: Option<String>,
+        /// Language code (default: en).
+        #[arg(short, long, default_value = "en")]
+        language: String,
+    },
     /// Search the GOG catalog.
     Search {
         /// Search query (game name).
@@ -555,6 +569,103 @@ fn cmd_install_steamcmd() -> ExitCode {
 
 // ── GOG commands ────────────────────────────────────────────────────
 
+fn parse_gog_platform(platform: Option<&str>) -> gamedepot::gog::Platform {
+    match platform.map(str::to_lowercase).as_deref() {
+        Some("windows" | "win") | None => gamedepot::gog::Platform::Windows,
+        Some("macos" | "mac" | "osx") => gamedepot::gog::Platform::MacOS,
+        Some("linux") => gamedepot::gog::Platform::Linux,
+        Some(other) => {
+            eprintln!("unknown platform: {other}, defaulting to windows");
+            gamedepot::gog::Platform::Windows
+        }
+    }
+}
+
+fn cmd_gog_download(
+    product_id: &str,
+    dir: Option<PathBuf>,
+    platform: gamedepot::gog::Platform,
+    language: &str,
+    refresh_token: &str,
+) -> ExitCode {
+    let mut gog = GogDepot::new()
+        .with_platform(platform)
+        .with_refresh_token(refresh_token);
+
+    // Get product info for the name / install dir.
+    let info = gog.app_info(product_id);
+    let dir_name = info
+        .as_ref()
+        .ok()
+        .and_then(|i| i.name.clone())
+        .unwrap_or_else(|| product_id.to_string());
+
+    let install_dir = dir.unwrap_or_else(|| default_install_dir("gog", &dir_name));
+
+    if let Ok(ref info) = info {
+        println!(
+            "{} (product {}, build {})",
+            info.name.as_deref().unwrap_or("unknown"),
+            info.product_id,
+            info.build_id.as_deref().unwrap_or("?"),
+        );
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&install_dir) {
+        eprintln!("error: could not create install directory: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    // Verification progress bar.
+    let verify_bar = indicatif::ProgressBar::new(0);
+    verify_bar.set_style(
+        indicatif::ProgressStyle::with_template(
+            "verifying [{wide_bar:.green/dim}] {pos}/{len} ({msg})",
+        )
+        .expect("valid template")
+        .progress_chars("━╸━"),
+    );
+
+    let dl_bar = progress_bar();
+    match gog.download_with_progress(
+        product_id,
+        &install_dir,
+        language,
+        |v| {
+            verify_bar.set_length(v.total);
+            verify_bar.set_position(v.checked);
+            if let Some(ref f) = v.current_file {
+                // Show just the filename, not the full path.
+                let name = f.rsplit('/').next().unwrap_or(f);
+                verify_bar.set_message(name.to_string());
+            }
+            if v.checked == v.total {
+                if v.invalid == 0 {
+                    verify_bar.finish_with_message(format!("all {} files up to date", v.valid,));
+                } else {
+                    verify_bar
+                        .finish_with_message(format!("{} ok, {} to download", v.valid, v.invalid,));
+                }
+            }
+        },
+        |p| {
+            dl_bar.set_length(p.total_bytes);
+            dl_bar.set_position(p.current_bytes);
+        },
+    ) {
+        Ok(()) => {
+            dl_bar.finish_with_message("done");
+            save_gog_token(&gog);
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            dl_bar.abandon_with_message("error");
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn cmd_gog_login() -> ExitCode {
     let theme = ColorfulTheme::default();
     let url = GogDepot::login_url();
@@ -840,6 +951,19 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
 fn run_gog_command(command: GogCommands) -> ExitCode {
     match command {
         GogCommands::Login => cmd_gog_login(),
+        GogCommands::Download {
+            id,
+            dir,
+            platform,
+            language,
+        } => {
+            let Some(token) = read_gog_token() else {
+                eprintln!("error: not logged in. Run `gamedepot gog login` first.");
+                return ExitCode::FAILURE;
+            };
+            let gog_platform = parse_gog_platform(platform.as_deref());
+            cmd_gog_download(&id, dir, gog_platform, &language, &token)
+        }
         GogCommands::Search { query } => cmd_gog_search(&query),
         GogCommands::Info { id } => cmd_gog_info(&id),
         GogCommands::Status { id } => cmd_status(&id, &DepotKind::Gog),
