@@ -296,13 +296,8 @@ impl SteamCmd {
     /// # Errors
     ///
     /// Returns an error if steamcmd fails.
-    pub fn download(
-        &mut self,
-        app_id: &str,
-        install_dir: &Path,
-        validate: bool,
-    ) -> Result<AppInfo, SteamCmdError> {
-        self.download_with_progress(app_id, install_dir, validate, |_| {}, |_| {})
+    pub fn download(&mut self, app_id: &str, install_dir: &Path) -> Result<(), SteamCmdError> {
+        self.download_with_progress(app_id, install_dir, |_| {})
     }
 
     /// Download or update an app, calling `on_progress` for each
@@ -315,36 +310,53 @@ impl SteamCmd {
         &mut self,
         app_id: &str,
         install_dir: &Path,
-        validate: bool,
-        on_info: impl FnOnce(&AppInfo),
         mut on_progress: impl FnMut(&DownloadProgress),
-    ) -> Result<AppInfo, SteamCmdError> {
+    ) -> Result<(), SteamCmdError> {
         let session = self.session()?;
-
-        // Fetch app info in the same session before downloading.
-        session.run_command("app_info_update 1")?;
-        session.run_command(&format!("app_info_print {app_id}"))?;
-        let info_output = session.run_command(&format!("app_info_print {app_id}"))?;
-        let info = parse::parse_app_info(app_id, &info_output);
-
-        on_info(&info);
-
         session.run_command(&format!(
             "force_install_dir {}",
             install_dir.to_string_lossy()
         ))?;
+        session.run_command_with_callback(&format!("app_update {app_id}"), |line| {
+            if let Some(progress) = parse::parse_progress(line) {
+                on_progress(&progress);
+            }
+        })?;
+        Ok(())
+    }
 
-        let validate_flag = if validate { " -validate" } else { "" };
-        session.run_command_with_callback(
-            &format!("app_update {app_id}{validate_flag}"),
-            |line| {
-                if let Some(progress) = parse::parse_progress(line) {
-                    on_progress(&progress);
-                }
-            },
-        )?;
+    /// Validate existing files for an installed app.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if steamcmd fails.
+    pub fn validate(&mut self, app_id: &str, install_dir: &Path) -> Result<(), SteamCmdError> {
+        self.validate_with_progress(app_id, install_dir, |_| {})
+    }
 
-        Ok(info)
+    /// Validate existing files, calling `on_progress` for each
+    /// parsed progress update as it arrives.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if steamcmd fails.
+    pub fn validate_with_progress(
+        &mut self,
+        app_id: &str,
+        install_dir: &Path,
+        mut on_progress: impl FnMut(&DownloadProgress),
+    ) -> Result<(), SteamCmdError> {
+        let session = self.session()?;
+        session.run_command(&format!(
+            "force_install_dir {}",
+            install_dir.to_string_lossy()
+        ))?;
+        session.run_command_with_callback(&format!("app_update {app_id} -validate"), |line| {
+            if let Some(progress) = parse::parse_progress(line) {
+                on_progress(&progress);
+            }
+        })?;
+        Ok(())
     }
 
     /// Query app info from Steam's servers.

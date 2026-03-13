@@ -82,18 +82,10 @@ pub enum DepotError {
 pub trait Depot {
     /// Download or update an app into the given directory.
     ///
-    /// If `validate` is true, existing files are verified against the
-    /// depot's checksums.
-    ///
     /// # Errors
     ///
     /// Returns an error if the download fails.
-    fn download(
-        &mut self,
-        app_id: &str,
-        install_dir: &Path,
-        validate: bool,
-    ) -> Result<(), DepotError>;
+    fn download(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError>;
 
     /// Query remote app info (name, latest build ID, etc.).
     ///

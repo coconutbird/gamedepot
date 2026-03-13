@@ -25,9 +25,7 @@ enum Commands {
         /// Directory to install into.
         #[arg(short, long)]
         dir: PathBuf,
-        /// Validate existing files.
-        #[arg(long, default_value_t = false)]
-        validate: bool,
+
         /// Steam username (omit for anonymous).
         #[arg(short, long)]
         username: Option<String>,
@@ -149,7 +147,7 @@ fn build_depot(
     Ok(depot)
 }
 
-fn cmd_download(depot: &mut SteamDepot, app_id: &str, dir: &Path, validate: bool) -> ExitCode {
+fn progress_bar() -> indicatif::ProgressBar {
     let bar = indicatif::ProgressBar::new(0);
     bar.set_style(
         indicatif::ProgressStyle::with_template(
@@ -158,26 +156,69 @@ fn cmd_download(depot: &mut SteamDepot, app_id: &str, dir: &Path, validate: bool
         .expect("valid template")
         .progress_chars("━╸━"),
     );
+    bar
+}
 
-    match depot.download_with_progress(
-        app_id,
-        dir,
-        validate,
-        |info| {
-            bar.println(format!(
-                "{} (app {}, build {})",
-                info.name.as_deref().unwrap_or("unknown"),
-                info.app_id,
-                info.build_id.as_deref().unwrap_or("?"),
-            ));
-        },
-        |p| {
-            bar.set_length(p.total_bytes);
-            bar.set_position(p.current_bytes);
-            bar.set_message(p.state.to_string());
-        },
-    ) {
-        Ok(_) => {
+fn print_app_info(depot: &mut SteamDepot, app_id: &str) {
+    if let Ok(info) = depot.app_info(app_id) {
+        println!(
+            "{} (app {}, build {})",
+            info.name.as_deref().unwrap_or("unknown"),
+            info.app_id,
+            info.build_id.as_deref().unwrap_or("?"),
+        );
+    }
+}
+
+fn cmd_download(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
+    print_app_info(depot, app_id);
+    let bar = progress_bar();
+    match depot.download_with_progress(app_id, dir, |p| {
+        bar.set_length(p.total_bytes);
+        bar.set_position(p.current_bytes);
+        bar.set_message(p.state.to_string());
+    }) {
+        Ok(()) => {
+            bar.finish_with_message("done");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            bar.abandon_with_message("failed");
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_validate(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
+    print_app_info(depot, app_id);
+    let bar = progress_bar();
+    match depot.validate_with_progress(app_id, dir, |p| {
+        bar.set_length(p.total_bytes);
+        bar.set_position(p.current_bytes);
+        bar.set_message(p.state.to_string());
+    }) {
+        Ok(()) => {
+            bar.finish_with_message("done");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            bar.abandon_with_message("failed");
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn cmd_update(depot: &mut SteamDepot, app_id: &str, dir: &Path) -> ExitCode {
+    print_app_info(depot, app_id);
+    let bar = progress_bar();
+    match depot.download_with_progress(app_id, dir, |p| {
+        bar.set_length(p.total_bytes);
+        bar.set_position(p.current_bytes);
+        bar.set_message(p.state.to_string());
+    }) {
+        Ok(()) => {
             bar.finish_with_message("done");
             ExitCode::SUCCESS
         }
@@ -294,12 +335,11 @@ fn main() -> ExitCode {
         Commands::Download {
             app_id,
             dir,
-            validate,
             username,
             password,
             platform,
         } => match build_depot(cli.install_steamcmd, username, password, platform) {
-            Ok(mut depot) => cmd_download(&mut depot, &app_id, &dir, validate),
+            Ok(mut depot) => cmd_download(&mut depot, &app_id, &dir),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
@@ -336,7 +376,7 @@ fn main() -> ExitCode {
             password,
             platform,
         } => match build_depot(cli.install_steamcmd, username, password, platform) {
-            Ok(mut depot) => cmd_download(&mut depot, &app_id, &dir, true),
+            Ok(mut depot) => cmd_validate(&mut depot, &app_id, &dir),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE
@@ -349,7 +389,7 @@ fn main() -> ExitCode {
             password,
             platform,
         } => match build_depot(cli.install_steamcmd, username, password, platform) {
-            Ok(mut depot) => cmd_download(&mut depot, &app_id, &dir, false),
+            Ok(mut depot) => cmd_update(&mut depot, &app_id, &dir),
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::FAILURE

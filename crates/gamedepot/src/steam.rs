@@ -93,49 +93,42 @@ impl SteamDepot {
     /// # Errors
     ///
     /// Returns an error if the download fails.
+    /// Download with a progress callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the download fails.
     pub fn download_with_progress(
         &mut self,
         app_id: &str,
         install_dir: &Path,
-        validate: bool,
-        on_info: impl FnOnce(&AppInfo),
         on_progress: impl FnMut(&steamcmd::DownloadProgress),
-    ) -> Result<AppInfo, DepotError> {
-        let info = self
-            .cmd
-            .download_with_progress(
-                app_id,
-                install_dir,
-                validate,
-                |steam_info| {
-                    on_info(&AppInfo {
-                        app_id: steam_info.app_id.clone(),
-                        name: steam_info.name.clone(),
-                        build_id: steam_info.build_id.clone(),
-                    });
-                },
-                on_progress,
-            )
-            .map_err(map_err)?;
-        Ok(AppInfo {
-            app_id: info.app_id,
-            name: info.name,
-            build_id: info.build_id,
-        })
+    ) -> Result<(), DepotError> {
+        self.cmd
+            .download_with_progress(app_id, install_dir, on_progress)
+            .map_err(map_err)
+    }
+
+    /// Validate with a progress callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation fails.
+    pub fn validate_with_progress(
+        &mut self,
+        app_id: &str,
+        install_dir: &Path,
+        on_progress: impl FnMut(&steamcmd::DownloadProgress),
+    ) -> Result<(), DepotError> {
+        self.cmd
+            .validate_with_progress(app_id, install_dir, on_progress)
+            .map_err(map_err)
     }
 }
 
 impl Depot for SteamDepot {
-    fn download(
-        &mut self,
-        app_id: &str,
-        install_dir: &Path,
-        validate: bool,
-    ) -> Result<(), DepotError> {
-        self.cmd
-            .download(app_id, install_dir, validate)
-            .map_err(map_err)?;
-        Ok(())
+    fn download(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
+        self.cmd.download(app_id, install_dir).map_err(map_err)
     }
 
     fn app_info(&mut self, app_id: &str) -> Result<AppInfo, DepotError> {
@@ -168,17 +161,11 @@ impl Depot for SteamDepot {
     }
 
     fn validate(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
-        self.cmd
-            .download(app_id, install_dir, true)
-            .map_err(map_err)?;
-        Ok(())
+        self.cmd.validate(app_id, install_dir).map_err(map_err)
     }
 
     fn update(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
-        self.cmd
-            .download(app_id, install_dir, false)
-            .map_err(map_err)?;
-        Ok(())
+        self.cmd.download(app_id, install_dir).map_err(map_err)
     }
 }
 
