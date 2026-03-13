@@ -6,9 +6,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use gamedepot::depot::{Depot, DepotError};
+use gamedepot::gog::GogDepot;
 use gamedepot::steam::{Login, Platform, SteamDepot};
-use gogapi::GogDl;
-use steamapi::SteamApi;
 
 use session::Session;
 
@@ -381,7 +380,7 @@ fn cmd_install_steamcmd() -> ExitCode {
 // ── GOG commands ────────────────────────────────────────────────────
 
 fn cmd_gog_login() -> ExitCode {
-    let url = GogDl::login_url();
+    let url = GogDepot::login_url();
     println!("Open this link in your browser and log in to GOG:\n");
     println!("  {url}\n");
     println!("After logging in you'll be redirected to a page.");
@@ -398,7 +397,7 @@ fn cmd_gog_login() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let mut gog = GogDl::new();
+    let mut gog = GogDepot::new();
     if let Err(e) = gog.login_with_code(&input) {
         eprintln!("error: {e}");
         return ExitCode::FAILURE;
@@ -427,7 +426,7 @@ fn cmd_gog_login() -> ExitCode {
 }
 
 fn cmd_gog_search(query: &str) -> ExitCode {
-    let gog = GogDl::new();
+    let gog = GogDepot::new();
     match gog.search(query) {
         Ok(products) => {
             if products.is_empty() {
@@ -448,7 +447,7 @@ fn cmd_gog_search(query: &str) -> ExitCode {
 }
 
 fn cmd_gog_info(product_id: &str) -> ExitCode {
-    let gog = GogDl::new();
+    let gog = GogDepot::new();
     match gog.app_info(product_id) {
         Ok(info) => {
             println!("Product ID: {}", info.product_id);
@@ -469,7 +468,7 @@ fn cmd_gog_info(product_id: &str) -> ExitCode {
 }
 
 fn cmd_gog_owned(search: Option<&str>, page: u32, refresh_token: &str) -> ExitCode {
-    let mut gog = GogDl::new().with_refresh_token(refresh_token);
+    let mut gog = GogDepot::new().with_refresh_token(refresh_token);
     match gog.owned_products(search, page) {
         Ok(products) => {
             // Persist the rotated refresh token.
@@ -496,7 +495,7 @@ fn cmd_gog_owned(search: Option<&str>, page: u32, refresh_token: &str) -> ExitCo
 }
 
 /// Persist the (possibly rotated) GOG refresh token back to the session.
-fn save_gog_token(gog: &GogDl) {
+fn save_gog_token(gog: &GogDepot) {
     if let Ok(token) = gog.refresh_token() {
         let mut session = Session::load().unwrap_or_default();
         session.gog.refresh_token = Some(token.to_owned());
@@ -527,7 +526,7 @@ fn read_steam_api_key() -> Option<String> {
 }
 
 fn cmd_steam_owned(api_key: &str, steam_id_or_vanity: &str) -> ExitCode {
-    let api = SteamApi::new(api_key);
+    let depot = SteamDepot::api_only().with_api_key(api_key);
 
     // If the input looks like a 64-bit Steam ID, use it directly.
     // Otherwise try to resolve it as a vanity URL.
@@ -536,7 +535,7 @@ fn cmd_steam_owned(api_key: &str, steam_id_or_vanity: &str) -> ExitCode {
     {
         steam_id_or_vanity.to_owned()
     } else {
-        match api.resolve_vanity_url(steam_id_or_vanity) {
+        match depot.resolve_vanity_url(steam_id_or_vanity) {
             Ok(id) => id,
             Err(e) => {
                 eprintln!("error resolving vanity URL: {e}");
@@ -545,7 +544,7 @@ fn cmd_steam_owned(api_key: &str, steam_id_or_vanity: &str) -> ExitCode {
         }
     };
 
-    match api.owned_games(&steam_id, true) {
+    match depot.owned_games(&steam_id, true) {
         Ok(games) => {
             if games.is_empty() {
                 println!("No owned games found (profile may be private).");
