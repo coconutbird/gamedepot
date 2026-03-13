@@ -13,6 +13,21 @@ pub struct AppInfo {
     pub build_id: Option<String>,
 }
 
+/// A search result from the store.
+#[derive(Debug, Clone)]
+pub struct SearchResult {
+    /// App identifier.
+    pub app_id: String,
+    /// Human-readable app name.
+    pub name: String,
+    /// Whether the app supports Windows.
+    pub windows: bool,
+    /// Whether the app supports macOS.
+    pub macos: bool,
+    /// Whether the app supports Linux.
+    pub linux: bool,
+}
+
 /// Local install status of an app.
 #[derive(Debug, Clone)]
 pub struct AppStatus {
@@ -88,4 +103,32 @@ pub trait Depot {
     ///
     /// Returns an error if the status check fails.
     fn app_status(&self, app_id: &str) -> Result<AppStatus, DepotError>;
+
+    /// Search the store for apps matching the given query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the search request fails.
+    fn search(&self, query: &str) -> Result<Vec<SearchResult>, DepotError>;
+
+    /// List locally installed apps.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the listing fails.
+    fn list(&self) -> Result<Vec<AppStatus>, DepotError>;
+
+    /// Validate existing files for an installed app.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation fails.
+    fn validate(&self, app_id: &str, install_dir: &Path) -> Result<(), DepotError>;
+
+    /// Update an installed app to the latest version.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the update fails.
+    fn update(&self, app_id: &str, install_dir: &Path) -> Result<(), DepotError>;
 }

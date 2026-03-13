@@ -5,5 +5,8 @@ edition = "2024"
 description = "A library for downloading Steam and GOG games"
 
 [dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
 steamcmd = { path = "../steamcmd" }
 thiserror = "2"
+ureq = "3.2.0"
