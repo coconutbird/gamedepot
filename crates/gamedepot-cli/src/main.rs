@@ -159,12 +159,25 @@ fn cmd_download(depot: &SteamDepot, app_id: &str, dir: &Path, validate: bool) ->
         .progress_chars("━╸━"),
     );
 
-    match depot.download_with_progress(app_id, dir, validate, |p| {
-        bar.set_length(p.total_bytes);
-        bar.set_position(p.current_bytes);
-        bar.set_message(p.state.to_string());
-    }) {
-        Ok(()) => {
+    match depot.download_with_progress(
+        app_id,
+        dir,
+        validate,
+        |info| {
+            bar.println(format!(
+                "{} (app {}, build {})",
+                info.name.as_deref().unwrap_or("unknown"),
+                info.app_id,
+                info.build_id.as_deref().unwrap_or("?"),
+            ));
+        },
+        |p| {
+            bar.set_length(p.total_bytes);
+            bar.set_position(p.current_bytes);
+            bar.set_message(p.state.to_string());
+        },
+    ) {
+        Ok(_) => {
             bar.finish_with_message("done");
             ExitCode::SUCCESS
         }

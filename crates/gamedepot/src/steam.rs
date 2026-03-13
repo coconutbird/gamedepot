@@ -99,11 +99,30 @@ impl SteamDepot {
         app_id: &str,
         install_dir: &Path,
         validate: bool,
+        on_info: impl FnOnce(&AppInfo),
         on_progress: impl FnMut(&steamcmd::DownloadProgress),
-    ) -> Result<(), DepotError> {
-        self.cmd
-            .download_with_progress(app_id, install_dir, validate, on_progress)
-            .map_err(map_err)
+    ) -> Result<AppInfo, DepotError> {
+        let info = self
+            .cmd
+            .download_with_progress(
+                app_id,
+                install_dir,
+                validate,
+                |steam_info| {
+                    on_info(&AppInfo {
+                        app_id: steam_info.app_id.clone(),
+                        name: steam_info.name.clone(),
+                        build_id: steam_info.build_id.clone(),
+                    });
+                },
+                on_progress,
+            )
+            .map_err(map_err)?;
+        Ok(AppInfo {
+            app_id: info.app_id,
+            name: info.name,
+            build_id: info.build_id,
+        })
     }
 }
 
@@ -111,7 +130,8 @@ impl Depot for SteamDepot {
     fn download(&self, app_id: &str, install_dir: &Path, validate: bool) -> Result<(), DepotError> {
         self.cmd
             .download(app_id, install_dir, validate)
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(())
     }
 
     fn app_info(&self, app_id: &str) -> Result<AppInfo, DepotError> {
@@ -146,13 +166,15 @@ impl Depot for SteamDepot {
     fn validate(&self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
         self.cmd
             .download(app_id, install_dir, true)
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(())
     }
 
     fn update(&self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
         self.cmd
             .download(app_id, install_dir, false)
-            .map_err(map_err)
+            .map_err(map_err)?;
+        Ok(())
     }
 }
 
