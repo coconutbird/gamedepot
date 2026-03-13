@@ -101,6 +101,17 @@ impl SteamDepot {
         self
     }
 
+    /// Set a callback for handling Steam Guard / TOTP prompts during
+    /// login. The callback receives the prompt text and must return
+    /// the auth code.
+    #[must_use]
+    pub fn with_auth_handler(mut self, handler: impl FnMut(&str) -> String + 'static) -> Self {
+        if let Some(cmd) = self.cmd.take() {
+            self.cmd = Some(cmd.with_auth_handler(handler));
+        }
+        self
+    }
+
     /// Set the Steam Web API key for library queries.
     #[must_use]
     pub fn with_api_key(mut self, key: &str) -> Self {

@@ -10,6 +10,14 @@ use crate::{Login, Platform};
 /// The prompt string steamcmd prints when ready for input.
 const PROMPT: &str = "Steam>";
 
+/// Substrings that indicate steamcmd is waiting for an auth code.
+const AUTH_PROMPTS: &[&str] = &[
+    "Two-factor code:",
+    "Steam Guard code:",
+    "two-factor code",
+    "steam guard code",
+];
+
 /// A long-lived steamcmd session.
 ///
 /// Spawns the steamcmd process once, handles login, and then accepts
@@ -23,6 +31,11 @@ pub struct Session {
 impl Session {
     /// Spawn steamcmd and log in.
     ///
+    /// If Steam Guard or TOTP is required, `on_auth_prompt` is called
+    /// with the prompt text and must return the auth code. Pass `None`
+    /// if no interactive auth handling is needed (login will hang if
+    /// Steam Guard is required).
+    ///
     /// # Errors
     ///
     /// Returns an error if the process cannot be spawned or login fails.
@@ -30,6 +43,7 @@ impl Session {
         steamcmd_path: &Path,
         login: &Login,
         platform: Option<Platform>,
+        on_auth_prompt: Option<&mut dyn FnMut(&str) -> String>,
     ) -> Result<Self, SteamCmdError> {
         let mut initial_args: Vec<String> = Vec::new();
 
@@ -66,7 +80,8 @@ impl Session {
         let mut session = Self { child, stdout };
 
         // Read until the first prompt — this consumes the login output.
-        let _login_output = session.read_until_prompt()?;
+        // If Steam Guard is required, handle the auth prompt.
+        session.read_login_output(on_auth_prompt)?;
 
         Ok(session)
     }
@@ -124,6 +139,84 @@ impl Session {
         drop(self.child.stdin.take());
 
         self.child.wait().map_err(SteamCmdError::Io)?;
+        Ok(())
+    }
+
+    /// Read login output, handling Steam Guard / TOTP prompts if they
+    /// appear. Reads byte-by-byte looking for either the `Steam>` prompt
+    /// (login succeeded) or an auth code prompt.
+    fn read_login_output(
+        &mut self,
+        mut on_auth_prompt: Option<&mut dyn FnMut(&str) -> String>,
+    ) -> Result<String, SteamCmdError> {
+        let mut buf = Vec::new();
+        let mut output = String::new();
+        let mut byte = [0u8; 1];
+        let prompt_bytes = PROMPT.as_bytes();
+
+        loop {
+            let n = self.stdout.read(&mut byte).map_err(SteamCmdError::Io)?;
+            if n == 0 {
+                if !buf.is_empty() {
+                    output.push_str(&String::from_utf8_lossy(&buf));
+                }
+                break;
+            }
+            buf.push(byte[0]);
+
+            // Check if we've reached the `Steam>` prompt.
+            if buf.len() >= prompt_bytes.len()
+                && buf[buf.len() - prompt_bytes.len()..] == *prompt_bytes
+            {
+                buf.truncate(buf.len() - prompt_bytes.len());
+                if !buf.is_empty() {
+                    output.push_str(&String::from_utf8_lossy(&buf));
+                }
+                break;
+            }
+
+            // On each newline (or when the buffer looks like an auth
+            // prompt), check whether steamcmd is asking for a code.
+            // Auth prompts typically end with ":" and no newline.
+            let current = String::from_utf8_lossy(&buf).to_string();
+            let is_auth = AUTH_PROMPTS
+                .iter()
+                .any(|p| current.to_lowercase().contains(p));
+
+            if is_auth {
+                output.push_str(&current);
+                buf.clear();
+
+                if let Some(ref mut handler) = on_auth_prompt {
+                    let code = handler(current.trim());
+                    self.write_stdin(&code)?;
+                } else {
+                    return Err(SteamCmdError::Other(
+                        "Steam Guard code required but no auth handler provided".into(),
+                    ));
+                }
+                continue;
+            }
+
+            // Flush completed lines.
+            if byte[0] == b'\n' {
+                output.push_str(&current);
+                buf.clear();
+            }
+        }
+
+        Ok(output)
+    }
+
+    /// Write a line to the child's stdin (used for auth codes).
+    fn write_stdin(&mut self, text: &str) -> Result<(), SteamCmdError> {
+        let stdin = self
+            .child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| SteamCmdError::Other("stdin not available".into()))?;
+        writeln!(stdin, "{text}").map_err(SteamCmdError::Io)?;
+        stdin.flush().map_err(SteamCmdError::Io)?;
         Ok(())
     }
 

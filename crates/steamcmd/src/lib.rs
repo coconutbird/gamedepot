@@ -146,6 +146,10 @@ impl AppStatus {
     }
 }
 
+/// A boxed callback that receives a Steam Guard / TOTP prompt and
+/// returns the auth code entered by the user.
+type AuthHandler = Box<dyn FnMut(&str) -> String>;
+
 /// Wrapper around the steamcmd binary.
 ///
 /// Holds a lazily-initialised session that is reused across calls.
@@ -164,6 +168,7 @@ pub struct SteamCmd {
     login: Login,
     platform: Option<Platform>,
     session: Option<Session>,
+    auth_handler: Option<AuthHandler>,
 }
 
 impl SteamCmd {
@@ -182,6 +187,7 @@ impl SteamCmd {
             login: Login::Anonymous,
             platform: None,
             session: None,
+            auth_handler: None,
         })
     }
 
@@ -198,6 +204,7 @@ impl SteamCmd {
                 login: Login::Anonymous,
                 platform: None,
                 session: None,
+                auth_handler: None,
             });
         }
 
@@ -210,6 +217,7 @@ impl SteamCmd {
                 login: Login::Anonymous,
                 platform: None,
                 session: None,
+                auth_handler: None,
             });
         }
 
@@ -231,6 +239,7 @@ impl SteamCmd {
             login: Login::Anonymous,
             platform: None,
             session: None,
+            auth_handler: None,
         })
     }
 
@@ -257,6 +266,15 @@ impl SteamCmd {
         self
     }
 
+    /// Set a callback for handling Steam Guard / TOTP prompts during
+    /// login. The callback receives the prompt text and must return
+    /// the auth code.
+    #[must_use]
+    pub fn with_auth_handler(mut self, handler: impl FnMut(&str) -> String + 'static) -> Self {
+        self.auth_handler = Some(Box::new(handler));
+        self
+    }
+
     /// Returns the path to the steamcmd binary.
     #[must_use]
     pub fn path(&self) -> &Path {
@@ -270,8 +288,18 @@ impl SteamCmd {
     /// Returns an error if the process cannot be spawned or login fails.
     pub fn session(&mut self) -> Result<&mut Session, SteamCmdError> {
         if self.session.is_none() {
-            self.session = Some(Session::start(&self.path, &self.login, self.platform)?);
+            let session = match self.auth_handler {
+                Some(ref mut handler) => Session::start(
+                    &self.path,
+                    &self.login,
+                    self.platform,
+                    Some(handler.as_mut()),
+                )?,
+                None => Session::start(&self.path, &self.login, self.platform, None)?,
+            };
+            self.session = Some(session);
         }
+
         // We just ensured `self.session` is `Some` above.
         self.session
             .as_mut()
