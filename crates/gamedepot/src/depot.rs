@@ -88,21 +88,26 @@ pub trait Depot {
     /// # Errors
     ///
     /// Returns an error if the download fails.
-    fn download(&self, app_id: &str, install_dir: &Path, validate: bool) -> Result<(), DepotError>;
+    fn download(
+        &mut self,
+        app_id: &str,
+        install_dir: &Path,
+        validate: bool,
+    ) -> Result<(), DepotError>;
 
     /// Query remote app info (name, latest build ID, etc.).
     ///
     /// # Errors
     ///
     /// Returns an error if the query fails.
-    fn app_info(&self, app_id: &str) -> Result<AppInfo, DepotError>;
+    fn app_info(&mut self, app_id: &str) -> Result<AppInfo, DepotError>;
 
     /// Check the local install status of an app.
     ///
     /// # Errors
     ///
     /// Returns an error if the status check fails.
-    fn app_status(&self, app_id: &str) -> Result<AppStatus, DepotError>;
+    fn app_status(&mut self, app_id: &str) -> Result<AppStatus, DepotError>;
 
     /// Search the store for apps matching the given query.
     ///
@@ -123,12 +128,12 @@ pub trait Depot {
     /// # Errors
     ///
     /// Returns an error if validation fails.
-    fn validate(&self, app_id: &str, install_dir: &Path) -> Result<(), DepotError>;
+    fn validate(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError>;
 
     /// Update an installed app to the latest version.
     ///
     /// # Errors
     ///
     /// Returns an error if the update fails.
-    fn update(&self, app_id: &str, install_dir: &Path) -> Result<(), DepotError>;
+    fn update(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError>;
 }

@@ -9,7 +9,6 @@ use crate::depot::{AppInfo, AppStatus, Depot, DepotError, SearchResult};
 pub use steamcmd::{Login, Platform};
 
 /// A [`Depot`] backed by `SteamCMD`.
-#[derive(Debug, Clone)]
 pub struct SteamDepot {
     cmd: steamcmd::SteamCmd,
 }
@@ -95,7 +94,7 @@ impl SteamDepot {
     ///
     /// Returns an error if the download fails.
     pub fn download_with_progress(
-        &self,
+        &mut self,
         app_id: &str,
         install_dir: &Path,
         validate: bool,
@@ -127,14 +126,19 @@ impl SteamDepot {
 }
 
 impl Depot for SteamDepot {
-    fn download(&self, app_id: &str, install_dir: &Path, validate: bool) -> Result<(), DepotError> {
+    fn download(
+        &mut self,
+        app_id: &str,
+        install_dir: &Path,
+        validate: bool,
+    ) -> Result<(), DepotError> {
         self.cmd
             .download(app_id, install_dir, validate)
             .map_err(map_err)?;
         Ok(())
     }
 
-    fn app_info(&self, app_id: &str) -> Result<AppInfo, DepotError> {
+    fn app_info(&mut self, app_id: &str) -> Result<AppInfo, DepotError> {
         let info = self.cmd.app_info(app_id).map_err(map_err)?;
         Ok(AppInfo {
             app_id: info.app_id,
@@ -143,7 +147,7 @@ impl Depot for SteamDepot {
         })
     }
 
-    fn app_status(&self, app_id: &str) -> Result<AppStatus, DepotError> {
+    fn app_status(&mut self, app_id: &str) -> Result<AppStatus, DepotError> {
         let status = self.cmd.app_status(app_id).map_err(map_err)?;
         let installed = status.is_installed();
         Ok(AppStatus {
@@ -163,14 +167,14 @@ impl Depot for SteamDepot {
         list_installed_apps()
     }
 
-    fn validate(&self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
+    fn validate(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
         self.cmd
             .download(app_id, install_dir, true)
             .map_err(map_err)?;
         Ok(())
     }
 
-    fn update(&self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
+    fn update(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
         self.cmd
             .download(app_id, install_dir, false)
             .map_err(map_err)?;

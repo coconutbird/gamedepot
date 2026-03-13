@@ -147,11 +147,16 @@ impl AppStatus {
 }
 
 /// Wrapper around the steamcmd binary.
-#[derive(Debug, Clone)]
+///
+/// Holds a lazily-initialised session that is reused across calls.
+/// The session is spawned on the first command that needs it and
+/// kept alive until the `SteamCmd` is dropped (or [`quit`](Self::quit)
+/// is called explicitly).
 pub struct SteamCmd {
     path: PathBuf,
     login: Login,
     platform: Option<Platform>,
+    session: Option<Session>,
 }
 
 impl SteamCmd {
@@ -169,6 +174,7 @@ impl SteamCmd {
             path,
             login: Login::Anonymous,
             platform: None,
+            session: None,
         })
     }
 
@@ -184,6 +190,7 @@ impl SteamCmd {
                 path,
                 login: Login::Anonymous,
                 platform: None,
+                session: None,
             });
         }
 
@@ -195,6 +202,7 @@ impl SteamCmd {
                 path: bin,
                 login: Login::Anonymous,
                 platform: None,
+                session: None,
             });
         }
 
@@ -215,6 +223,7 @@ impl SteamCmd {
             path: bin,
             login: Login::Anonymous,
             platform: None,
+            session: None,
         })
     }
 
@@ -247,14 +256,32 @@ impl SteamCmd {
         &self.path
     }
 
-    /// Open a long-lived session: spawn steamcmd, log in, and return a
-    /// handle that accepts commands via stdin.
+    /// Return a reference to the live session, spawning one if needed.
     ///
     /// # Errors
     ///
     /// Returns an error if the process cannot be spawned or login fails.
-    pub fn session(&self) -> Result<Session, SteamCmdError> {
-        Session::start(&self.path, &self.login, self.platform)
+    pub fn session(&mut self) -> Result<&mut Session, SteamCmdError> {
+        if self.session.is_none() {
+            self.session = Some(Session::start(&self.path, &self.login, self.platform)?);
+        }
+        // We just ensured `self.session` is `Some` above.
+        self.session
+            .as_mut()
+            .ok_or_else(|| SteamCmdError::Other("session unexpectedly missing".into()))
+    }
+
+    /// Shut down the running session (if any) and release the child
+    /// process.  A new session will be spawned on the next command.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the process cannot be waited on.
+    pub fn quit(&mut self) -> Result<(), SteamCmdError> {
+        if let Some(session) = self.session.take() {
+            session.quit()?;
+        }
+        Ok(())
     }
 
     /// Download or update an app.
@@ -263,7 +290,7 @@ impl SteamCmd {
     ///
     /// Returns an error if steamcmd fails.
     pub fn download(
-        &self,
+        &mut self,
         app_id: &str,
         install_dir: &Path,
         validate: bool,
@@ -278,19 +305,18 @@ impl SteamCmd {
     ///
     /// Returns an error if steamcmd fails.
     pub fn download_with_progress(
-        &self,
+        &mut self,
         app_id: &str,
         install_dir: &Path,
         validate: bool,
         on_info: impl FnOnce(&AppInfo),
         mut on_progress: impl FnMut(&DownloadProgress),
     ) -> Result<AppInfo, SteamCmdError> {
-        let mut session = self.session()?;
+        let session = self.session()?;
 
         // Fetch app info in the same session before downloading.
         session.run_command("app_info_update 1")?;
         session.run_command(&format!("app_info_print {app_id}"))?;
-
         let info_output = session.run_command(&format!("app_info_print {app_id}"))?;
         let info = parse::parse_app_info(app_id, &info_output);
 
@@ -302,7 +328,6 @@ impl SteamCmd {
         ))?;
 
         let validate_flag = if validate { " -validate" } else { "" };
-
         session.run_command_with_callback(
             &format!("app_update {app_id}{validate_flag}"),
             |line| {
@@ -311,8 +336,6 @@ impl SteamCmd {
                 }
             },
         )?;
-
-        session.quit()?;
 
         Ok(info)
     }
@@ -325,12 +348,11 @@ impl SteamCmd {
     /// # Errors
     ///
     /// Returns an error if steamcmd fails.
-    pub fn app_info(&self, app_id: &str) -> Result<AppInfo, SteamCmdError> {
-        let mut session = self.session()?;
+    pub fn app_info(&mut self, app_id: &str) -> Result<AppInfo, SteamCmdError> {
+        let session = self.session()?;
         session.run_command("app_info_update 1")?;
         session.run_command(&format!("app_info_print {app_id}"))?;
         let output = session.run_command(&format!("app_info_print {app_id}"))?;
-        session.quit()?;
         Ok(parse::parse_app_info(app_id, &output))
     }
 
@@ -339,10 +361,9 @@ impl SteamCmd {
     /// # Errors
     ///
     /// Returns an error if steamcmd fails.
-    pub fn app_status(&self, app_id: &str) -> Result<AppStatus, SteamCmdError> {
-        let mut session = self.session()?;
+    pub fn app_status(&mut self, app_id: &str) -> Result<AppStatus, SteamCmdError> {
+        let session = self.session()?;
         let output = session.run_command(&format!("app_status {app_id}"))?;
-        session.quit()?;
         Ok(parse::parse_app_status(app_id, &output))
     }
 }
