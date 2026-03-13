@@ -82,8 +82,6 @@ enum SteamCommands {
         /// Search query (game name).
         query: String,
     },
-    /// List locally installed games.
-    List,
     /// Validate an installed game's files.
     Validate {
         /// App ID to validate.
@@ -339,31 +337,6 @@ fn cmd_search(query: &str) -> ExitCode {
     }
 }
 
-fn cmd_list() -> ExitCode {
-    match SteamDepot::list_installed() {
-        Ok(apps) => {
-            if apps.is_empty() {
-                println!("No installed apps found.");
-            } else {
-                for app in &apps {
-                    let name = app.name.as_deref().unwrap_or("unknown");
-                    let status = if app.installed {
-                        "installed"
-                    } else {
-                        "incomplete"
-                    };
-                    println!("{:<10} {} [{}]", app.app_id, name, status);
-                }
-            }
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
 fn cmd_install_steamcmd() -> ExitCode {
     match SteamDepot::install() {
         Ok(_) => {
@@ -481,7 +454,7 @@ fn cmd_gog_owned(search: Option<&str>, page: u32, refresh_token: &str) -> ExitCo
                     let platforms = p
                         .works_on
                         .as_ref()
-                        .map_or_else(String::new, |w| format_platforms(w.Windows, w.Mac, w.Linux));
+                        .map_or_else(String::new, |w| format_platforms(w.windows, w.mac, w.linux));
                     println!("{:<12} {} [{}]", p.id, p.title, platforms);
                 }
             }
@@ -615,7 +588,6 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
             }
         },
         SteamCommands::Search { query } => cmd_search(&query),
-        SteamCommands::List => cmd_list(),
         SteamCommands::Validate {
             app_id,
             dir,

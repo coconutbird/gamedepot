@@ -108,13 +108,6 @@ pub trait Depot {
     /// Returns an error if the search request fails.
     fn search(&self, query: &str) -> Result<Vec<SearchResult>, DepotError>;
 
-    /// List locally installed apps.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the listing fails.
-    fn list(&self) -> Result<Vec<AppStatus>, DepotError>;
-
     /// Validate existing files for an installed app.
     ///
     /// # Errors

@@ -1,6 +1,20 @@
 // Data types for GOG API responses.
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+
+/// Deserialize a value that may be a JSON string or integer into a `String`.
+fn string_or_number<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrNumber {
+        Str(String),
+        Num(u64),
+    }
+    match StringOrNumber::deserialize(deserializer)? {
+        StringOrNumber::Str(s) => Ok(s),
+        StringOrNumber::Num(n) => Ok(n.to_string()),
+    }
+}
 
 // ── Catalog / Search ────────────────────────────────────────────────
 
@@ -17,6 +31,7 @@ pub struct CatalogResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogProduct {
+    #[serde(deserialize_with = "string_or_number")]
     pub id: String,
     pub slug: String,
     pub title: String,
@@ -45,6 +60,7 @@ pub struct CatalogPrice {
 /// Response from the product details API.
 #[derive(Debug, Deserialize)]
 pub struct ProductResponse {
+    #[serde(deserialize_with = "string_or_number")]
     pub id: String,
     pub title: String,
     pub slug: String,
@@ -148,6 +164,7 @@ pub struct OwnedProductsResponse {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OwnedProduct {
+    #[serde(deserialize_with = "string_or_number")]
     pub id: String,
     pub title: String,
     pub slug: String,
@@ -166,12 +183,12 @@ pub struct OwnedProduct {
 
 /// Platform support flags from the owned-products response.
 #[derive(Debug, Deserialize)]
-#[allow(non_snake_case)]
+#[serde(rename_all = "PascalCase")]
 pub struct WorksOn {
     #[serde(default)]
-    pub Windows: bool,
+    pub windows: bool,
     #[serde(default)]
-    pub Mac: bool,
+    pub mac: bool,
     #[serde(default)]
-    pub Linux: bool,
+    pub linux: bool,
 }

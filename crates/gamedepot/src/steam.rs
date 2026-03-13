@@ -126,15 +126,6 @@ impl SteamDepot {
         search_steam_store(query)
     }
 
-    /// List locally installed apps without needing a steamcmd instance.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the steamapps directory cannot be read.
-    pub fn list_installed() -> Result<Vec<AppStatus>, DepotError> {
-        list_installed_apps()
-    }
-
     /// Download with a per-line progress callback.
     ///
     /// # Errors
@@ -256,10 +247,6 @@ impl Depot for SteamDepot {
         search_steam_store(query)
     }
 
-    fn list(&self) -> Result<Vec<AppStatus>, DepotError> {
-        list_installed_apps()
-    }
-
     fn validate(&mut self, app_id: &str, install_dir: &Path) -> Result<(), DepotError> {
         self.require_cmd()?
             .validate(app_id, install_dir)
@@ -339,122 +326,6 @@ fn urlencoded(s: &str) -> String {
         }
     }
     out
-}
-
-/// Scan the local `steamapps` directory for installed apps via `.acf` files.
-fn list_installed_apps() -> Result<Vec<AppStatus>, DepotError> {
-    let steamapps = find_steamapps_dir()?;
-    let mut apps = Vec::new();
-
-    let entries = std::fs::read_dir(&steamapps)
-        .map_err(|e| DepotError::Other(format!("failed to read {}: {e}", steamapps.display())))?;
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "acf")
-            && let Some(status) = parse_acf_file(&path)
-        {
-            apps.push(status);
-        }
-    }
-
-    Ok(apps)
-}
-
-/// Find the default steamapps directory for the current OS.
-fn find_steamapps_dir() -> Result<std::path::PathBuf, DepotError> {
-    let home = dirs_for_steamapps()?;
-    for candidate in &home {
-        if candidate.is_dir() {
-            return Ok(candidate.clone());
-        }
-    }
-    Err(DepotError::Other(
-        "could not find steamapps directory".into(),
-    ))
-}
-
-/// Return candidate steamapps directories for the current OS.
-fn dirs_for_steamapps() -> Result<Vec<std::path::PathBuf>, DepotError> {
-    let home = home_dir()?;
-    let mut dirs = Vec::new();
-
-    #[cfg(target_os = "macos")]
-    {
-        dirs.push(home.join("Library/Application Support/Steam/steamapps"));
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        dirs.push(home.join(".steam/steam/steamapps"));
-        dirs.push(home.join(".local/share/Steam/steamapps"));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        dirs.push(std::path::PathBuf::from(
-            "C:\\Program Files (x86)\\Steam\\steamapps",
-        ));
-        dirs.push(std::path::PathBuf::from(
-            "C:\\Program Files\\Steam\\steamapps",
-        ));
-    }
-
-    // Also check the steamcmd install location.
-    if let Ok(install_dir) = steamcmd::install::default_install_dir() {
-        dirs.push(install_dir.join("steamapps"));
-    }
-
-    Ok(dirs)
-}
-
-/// Get the user's home directory.
-fn home_dir() -> Result<std::path::PathBuf, DepotError> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(std::path::PathBuf::from)
-        .map_err(|_| DepotError::Other("could not determine home directory".into()))
-}
-
-/// Parse a `.acf` manifest file into an `AppStatus`.
-fn parse_acf_file(path: &Path) -> Option<AppStatus> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let app_id = extract_acf_value(&content, "appid")?;
-    let name = extract_acf_value(&content, "name");
-    let build_id = extract_acf_value(&content, "buildid");
-    let size_on_disk =
-        extract_acf_value(&content, "SizeOnDisk").and_then(|s| s.parse::<u64>().ok());
-    let state_flags = extract_acf_value(&content, "StateFlags").and_then(|s| s.parse::<u32>().ok());
-    let installed = state_flags == Some(4);
-
-    Some(AppStatus {
-        app_id,
-        name: Some(name.unwrap_or_default()),
-        build_id,
-        size_on_disk,
-        installed,
-    })
-}
-
-/// Extract a quoted value from a VDF/ACF key-value file.
-fn extract_acf_value(content: &str, key: &str) -> Option<String> {
-    for line in content.lines() {
-        let trimmed = line.trim();
-        // Match patterns like:   "appid"		"730"
-        if let Some(rest) = trimmed.strip_prefix('"')
-            && let Some(rest) = rest.strip_prefix(key)
-            && let Some(rest) = rest.strip_prefix('"')
-        {
-            let rest = rest.trim();
-            if let Some(rest) = rest.strip_prefix('"')
-                && let Some(val) = rest.strip_suffix('"')
-            {
-                return Some(val.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn map_err(e: steamcmd::SteamCmdError) -> DepotError {
