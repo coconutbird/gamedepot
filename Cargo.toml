@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/gamedepot",
     "crates/gamedepot-cli",
-    "crates/gogdl",
+    "crates/gogapi",
+    "crates/steamapi",
     "crates/steamcmd",
 ]

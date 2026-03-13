@@ -12,6 +12,10 @@ pub struct Session {
     /// GOG session data.
     #[serde(default)]
     pub gog: GogSession,
+
+    /// Steam session data.
+    #[serde(default)]
+    pub steam: SteamSession,
 }
 
 /// GOG-specific session state.
@@ -19,6 +23,13 @@ pub struct Session {
 pub struct GogSession {
     /// The `OAuth2` refresh token (rotates on every use).
     pub refresh_token: Option<String>,
+}
+
+/// Steam-specific session state.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct SteamSession {
+    /// Steam Web API key.
+    pub api_key: Option<String>,
 }
 
 impl Session {

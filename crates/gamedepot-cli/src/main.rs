@@ -7,7 +7,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use gamedepot::depot::{Depot, DepotError};
 use gamedepot::steam::{Login, Platform, SteamDepot};
-use gogdl::GogDl;
+use gogapi::GogDl;
+use steamapi::SteamApi;
 
 use session::Session;
 
@@ -117,6 +118,11 @@ enum SteamCommands {
         /// Target platform override.
         #[arg(long)]
         platform: Option<String>,
+    },
+    /// List games you own (requires Steam API key).
+    Owned {
+        /// Steam ID or vanity URL name.
+        steam_id: String,
     },
     /// Download and install `SteamCMD` to ~/steamcmd.
     InstallSteamcmd,
@@ -511,6 +517,56 @@ fn read_gog_token() -> Option<String> {
     Session::load().ok().and_then(|s| s.gog.refresh_token)
 }
 
+/// Read the Steam Web API key from `STEAM_API_KEY` env var, falling
+/// back to the session file.
+fn read_steam_api_key() -> Option<String> {
+    if let Ok(key) = std::env::var("STEAM_API_KEY") {
+        return Some(key);
+    }
+    Session::load().ok().and_then(|s| s.steam.api_key)
+}
+
+fn cmd_steam_owned(api_key: &str, steam_id_or_vanity: &str) -> ExitCode {
+    let api = SteamApi::new(api_key);
+
+    // If the input looks like a 64-bit Steam ID, use it directly.
+    // Otherwise try to resolve it as a vanity URL.
+    let steam_id = if steam_id_or_vanity.len() == 17
+        && steam_id_or_vanity.chars().all(|c| c.is_ascii_digit())
+    {
+        steam_id_or_vanity.to_owned()
+    } else {
+        match api.resolve_vanity_url(steam_id_or_vanity) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("error resolving vanity URL: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
+    match api.owned_games(&steam_id, true) {
+        Ok(games) => {
+            if games.is_empty() {
+                println!("No owned games found (profile may be private).");
+            } else {
+                println!("{} games owned:\n", games.len());
+                for g in &games {
+                    let name = g.name.as_deref().unwrap_or("?");
+                    let hours = g.playtime_forever / 60;
+                    let mins = g.playtime_forever % 60;
+                    println!("{:<12} {} [{hours}h {mins}m]", g.appid, name);
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 // ── main ────────────────────────────────────────────────────────────
 
 fn main() -> ExitCode {
@@ -587,6 +643,16 @@ fn run_steam_command(command: SteamCommands, install: bool) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        SteamCommands::Owned { steam_id } => {
+            let Some(api_key) = read_steam_api_key() else {
+                eprintln!(
+                    "error: STEAM_API_KEY not set. \
+                     Get one at https://steamcommunity.com/dev/apikey"
+                );
+                return ExitCode::FAILURE;
+            };
+            cmd_steam_owned(&api_key, &steam_id)
+        }
         SteamCommands::InstallSteamcmd => cmd_install_steamcmd(),
     }
 }

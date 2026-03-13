@@ -7,7 +7,8 @@ description = "CLI tool for downloading Steam and GOG games"
 [dependencies]
 clap = { version = "4.6.0", features = ["derive"] }
 gamedepot = { path = "../gamedepot" }
-gogdl = { version = "0.1.0", path = "../gogdl" }
+gogapi = { version = "0.1.0", path = "../gogapi" }
 indicatif = "0.18.4"
 serde = { version = "1.0.228", features = ["derive"] }
+steamapi = { version = "0.1.0", path = "../steamapi" }
 toml = "1.0.6"

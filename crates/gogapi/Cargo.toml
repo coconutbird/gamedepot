@@ -1,5 +1,5 @@
 [package]
-name = "gogdl"
+name = "gogapi"
 version = "0.1.0"
 edition = "2024"
 description = "GOG game downloader using the GOG REST API"
