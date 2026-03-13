@@ -34,9 +34,12 @@ pub use types::{
     PlayerSummary,
 };
 
+use api::API_BASE;
+
 /// Steam Web API client.
 #[derive(Debug, Clone)]
 pub struct SteamApi {
+    client: reqwest::blocking::Client,
     api_key: Option<String>,
 }
 
@@ -45,6 +48,7 @@ impl SteamApi {
     #[must_use]
     pub fn new(api_key: &str) -> Self {
         Self {
+            client: reqwest::blocking::Client::new(),
             api_key: Some(api_key.to_owned()),
         }
     }
@@ -55,7 +59,10 @@ impl SteamApi {
     /// building up the client before setting the key.
     #[must_use]
     pub fn without_key() -> Self {
-        Self { api_key: None }
+        Self {
+            client: reqwest::blocking::Client::new(),
+            api_key: None,
+        }
     }
 
     /// Set the API key.
@@ -65,10 +72,41 @@ impl SteamApi {
         self
     }
 
-    /// Return the API key, or an error if none is set.
-    fn require_key(&self) -> Result<&str, SteamError> {
-        self.api_key
+    /// GET an endpoint that requires an API key.
+    ///
+    /// Automatically appends `key` and `format=json` query parameters.
+    fn get<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+    ) -> Result<T, SteamError> {
+        let key = self
+            .api_key
             .as_deref()
-            .ok_or_else(|| SteamError::ApiKeyRequired("set STEAM_API_KEY".to_owned()))
+            .ok_or_else(|| SteamError::ApiKeyRequired("set STEAM_API_KEY".to_owned()))?;
+        self.client
+            .get(format!("{API_BASE}{path}"))
+            .query(&[("key", key), ("format", "json")])
+            .query(params)
+            .send()
+            .map_err(|e| SteamError::Http(e.to_string()))?
+            .json()
+            .map_err(|e| SteamError::Parse(e.to_string()))
+    }
+
+    /// GET an endpoint that does **not** require an API key.
+    fn get_public<T: serde::de::DeserializeOwned>(
+        &self,
+        path: &str,
+        params: &[(&str, &str)],
+    ) -> Result<T, SteamError> {
+        self.client
+            .get(format!("{API_BASE}{path}"))
+            .query(&[("format", "json")])
+            .query(params)
+            .send()
+            .map_err(|e| SteamError::Http(e.to_string()))?
+            .json()
+            .map_err(|e| SteamError::Parse(e.to_string()))
     }
 }

@@ -1,6 +1,5 @@
 //! `ISteamNews` interface methods.
 
-use super::{API_BASE, get};
 use crate::SteamApi;
 use crate::error::SteamError;
 use crate::types::{NewsEnvelope, NewsItem};
@@ -22,13 +21,17 @@ impl SteamApi {
         count: Option<u32>,
         max_length: Option<u32>,
     ) -> Result<Vec<NewsItem>, SteamError> {
-        let count = count.unwrap_or(10);
-        let max_length = max_length.unwrap_or(0);
-        let url = format!(
-            "{API_BASE}/ISteamNews/GetNewsForApp/v0002/\
-             ?appid={app_id}&count={count}&maxlength={max_length}&format=json",
-        );
-        let envelope: NewsEnvelope = get(&url)?;
+        let app_id_str = app_id.to_string();
+        let count_str = count.unwrap_or(10).to_string();
+        let max_len_str = max_length.unwrap_or(0).to_string();
+        let envelope: NewsEnvelope = self.get_public(
+            "/ISteamNews/GetNewsForApp/v0002/",
+            &[
+                ("appid", &app_id_str),
+                ("count", &count_str),
+                ("maxlength", &max_len_str),
+            ],
+        )?;
         Ok(envelope.appnews.newsitems)
     }
 }

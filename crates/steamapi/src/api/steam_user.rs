@@ -1,6 +1,5 @@
 //! `ISteamUser` interface methods.
 
-use super::{API_BASE, get};
 use crate::SteamApi;
 use crate::error::SteamError;
 use crate::types::{
@@ -16,13 +15,11 @@ impl SteamApi {
     /// Returns an error if the API key is missing, the request fails,
     /// or the response cannot be parsed.
     pub fn player_summaries(&self, steam_ids: &[&str]) -> Result<Vec<PlayerSummary>, SteamError> {
-        let key = self.require_key()?;
         let ids = steam_ids.join(",");
-        let url = format!(
-            "{API_BASE}/ISteamUser/GetPlayerSummaries/v0002/\
-             ?key={key}&steamids={ids}&format=json",
-        );
-        let envelope: PlayerSummariesEnvelope = get(&url)?;
+        let envelope: PlayerSummariesEnvelope = self.get(
+            "/ISteamUser/GetPlayerSummaries/v0002/",
+            &[("steamids", &ids)],
+        )?;
         Ok(envelope.response.players)
     }
 
@@ -52,12 +49,10 @@ impl SteamApi {
         steam_id: &str,
         relationship: &str,
     ) -> Result<Vec<Friend>, SteamError> {
-        let key = self.require_key()?;
-        let url = format!(
-            "{API_BASE}/ISteamUser/GetFriendList/v0001/\
-             ?key={key}&steamid={steam_id}&relationship={relationship}&format=json",
-        );
-        let envelope: FriendListEnvelope = get(&url)?;
+        let envelope: FriendListEnvelope = self.get(
+            "/ISteamUser/GetFriendList/v0001/",
+            &[("steamid", steam_id), ("relationship", relationship)],
+        )?;
         Ok(envelope.friendslist.friends)
     }
 
@@ -68,13 +63,9 @@ impl SteamApi {
     /// Returns an error if the API key is missing, the request fails,
     /// or the response cannot be parsed.
     pub fn player_bans(&self, steam_ids: &[&str]) -> Result<Vec<PlayerBan>, SteamError> {
-        let key = self.require_key()?;
         let ids = steam_ids.join(",");
-        let url = format!(
-            "{API_BASE}/ISteamUser/GetPlayerBans/v1/\
-             ?key={key}&steamids={ids}&format=json",
-        );
-        let envelope: PlayerBansEnvelope = get(&url)?;
+        let envelope: PlayerBansEnvelope =
+            self.get("/ISteamUser/GetPlayerBans/v1/", &[("steamids", &ids)])?;
         Ok(envelope.players)
     }
 
@@ -87,12 +78,10 @@ impl SteamApi {
     /// Returns an error if the API key is missing, the request fails,
     /// or the vanity name doesn't match any user.
     pub fn resolve_vanity_url(&self, vanity_name: &str) -> Result<String, SteamError> {
-        let key = self.require_key()?;
-        let url = format!(
-            "{API_BASE}/ISteamUser/ResolveVanityURL/v0001/\
-             ?key={key}&vanityurl={vanity_name}&format=json",
-        );
-        let envelope: VanityEnvelope = get(&url)?;
+        let envelope: VanityEnvelope = self.get(
+            "/ISteamUser/ResolveVanityURL/v0001/",
+            &[("vanityurl", vanity_name)],
+        )?;
         if envelope.response.success == 1 {
             envelope
                 .response

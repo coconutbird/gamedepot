@@ -1,8 +1,5 @@
 //! `ISteamUserStats` interface methods.
 
-use std::fmt::Write;
-
-use super::{API_BASE, get};
 use crate::SteamApi;
 use crate::error::SteamError;
 use crate::types::{
@@ -22,11 +19,11 @@ impl SteamApi {
         &self,
         app_id: u64,
     ) -> Result<Vec<AchievementPercentage>, SteamError> {
-        let url = format!(
-            "{API_BASE}/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v0002/\
-             ?gameid={app_id}&format=json",
-        );
-        let envelope: GlobalAchievementsEnvelope = get(&url)?;
+        let app_id_str = app_id.to_string();
+        let envelope: GlobalAchievementsEnvelope = self.get_public(
+            "/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v0002/",
+            &[("gameid", &app_id_str)],
+        )?;
         Ok(envelope.achievementpercentages.achievements)
     }
 
@@ -42,15 +39,13 @@ impl SteamApi {
         app_id: u64,
         language: Option<&str>,
     ) -> Result<Vec<PlayerAchievement>, SteamError> {
-        let key = self.require_key()?;
-        let mut url = format!(
-            "{API_BASE}/ISteamUserStats/GetPlayerAchievements/v0001/\
-             ?appid={app_id}&key={key}&steamid={steam_id}&format=json",
-        );
+        let app_id_str = app_id.to_string();
+        let mut params: Vec<(&str, &str)> = vec![("appid", &app_id_str), ("steamid", steam_id)];
         if let Some(lang) = language {
-            let _ = write!(url, "&l={lang}");
+            params.push(("l", lang));
         }
-        let envelope: PlayerAchievementsEnvelope = get(&url)?;
+        let envelope: PlayerAchievementsEnvelope =
+            self.get("/ISteamUserStats/GetPlayerAchievements/v0001/", &params)?;
         Ok(envelope.playerstats.achievements)
     }
 
@@ -65,12 +60,11 @@ impl SteamApi {
         steam_id: &str,
         app_id: u64,
     ) -> Result<Vec<PlayerStat>, SteamError> {
-        let key = self.require_key()?;
-        let url = format!(
-            "{API_BASE}/ISteamUserStats/GetUserStatsForGame/v0002/\
-             ?appid={app_id}&key={key}&steamid={steam_id}&format=json",
-        );
-        let envelope: UserStatsEnvelope = get(&url)?;
+        let app_id_str = app_id.to_string();
+        let envelope: UserStatsEnvelope = self.get(
+            "/ISteamUserStats/GetUserStatsForGame/v0002/",
+            &[("appid", &app_id_str), ("steamid", steam_id)],
+        )?;
         Ok(envelope.playerstats.stats)
     }
 }
