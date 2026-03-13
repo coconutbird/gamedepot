@@ -67,18 +67,21 @@ pub struct AppInfo {
 /// Talks directly to the GOG REST API — no external binary needed.
 /// Authentication is only required for downloading; searching and
 /// querying product info work without a token.
+///
+/// Locale, country, and currency default to en-US / US / USD but can
+/// be overridden with the builder methods.
 pub struct GogDl {
+    client: api::Client,
     platform: Option<Platform>,
-    token: Option<String>,
 }
 
 impl GogDl {
-    /// Create a new `GogDl` instance.
+    /// Create a new `GogDl` instance with default locale settings.
     #[must_use]
     pub fn new() -> Self {
         Self {
+            client: api::Client::new(),
             platform: None,
-            token: None,
         }
     }
 
@@ -91,8 +94,29 @@ impl GogDl {
 
     /// Set an `OAuth2` access token for authenticated requests.
     #[must_use]
-    pub fn with_token(mut self, token: String) -> Self {
-        self.token = Some(token);
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.client.token = Some(token.into());
+        self
+    }
+
+    /// Override the locale (e.g. `"de-DE"`).
+    #[must_use]
+    pub fn with_locale(mut self, locale: impl Into<String>) -> Self {
+        self.client.locale = locale.into();
+        self
+    }
+
+    /// Override the country code (e.g. `"DE"`).
+    #[must_use]
+    pub fn with_country(mut self, country_code: impl Into<String>) -> Self {
+        self.client.country_code = country_code.into();
+        self
+    }
+
+    /// Override the currency code (e.g. `"EUR"`).
+    #[must_use]
+    pub fn with_currency(mut self, currency_code: impl Into<String>) -> Self {
+        self.client.currency_code = currency_code.into();
         self
     }
 
@@ -102,7 +126,7 @@ impl GogDl {
     ///
     /// Returns an error if the HTTP request or JSON parsing fails.
     pub fn search(&self, query: &str) -> Result<Vec<types::CatalogProduct>, GogError> {
-        let resp = api::search(query)?;
+        let resp = self.client.search(query)?;
         Ok(resp.products)
     }
 
@@ -112,7 +136,7 @@ impl GogDl {
     ///
     /// Returns an error if the HTTP request or JSON parsing fails.
     pub fn app_info(&self, product_id: &str) -> Result<AppInfo, GogError> {
-        let product = api::product_info(product_id)?;
+        let product = self.client.product_info(product_id)?;
 
         let (windows, macos, linux) = if let Some(ref compat) = product.content_system_compatibility
         {
@@ -144,14 +168,14 @@ impl GogDl {
             .platform
             .ok_or_else(|| GogError::Other("no platform set".into()))?
             .as_gog_str();
-        let resp = api::builds(product_id, os)?;
+        let resp = self.client.builds(product_id, os)?;
         Ok(resp.items)
     }
 
     /// Get the latest build ID for the configured platform, if any.
     fn latest_build_id(&self, product_id: &str) -> Option<String> {
         let os = self.platform?.as_gog_str();
-        let resp = api::builds(product_id, os).ok()?;
+        let resp = self.client.builds(product_id, os).ok()?;
         resp.items.first().map(|b| b.build_id.clone())
     }
 }
