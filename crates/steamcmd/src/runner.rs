@@ -78,6 +78,27 @@ impl Session {
     ///
     /// Returns an error if writing to stdin or reading from stdout fails.
     pub fn run_command(&mut self, command: &str) -> Result<String, SteamCmdError> {
+        self.send_command(command)?;
+        self.read_until_prompt()
+    }
+
+    /// Send a command and stream each output line to a callback as it
+    /// arrives. Returns the full collected output when the prompt appears.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to stdin or reading from stdout fails.
+    pub fn run_command_with_callback(
+        &mut self,
+        command: &str,
+        mut on_line: impl FnMut(&str),
+    ) -> Result<String, SteamCmdError> {
+        self.send_command(command)?;
+        self.read_until_prompt_with_callback(&mut on_line)
+    }
+
+    /// Write a command to the child's stdin.
+    fn send_command(&mut self, command: &str) -> Result<(), SteamCmdError> {
         let stdin = self
             .child
             .stdin
@@ -86,8 +107,7 @@ impl Session {
 
         writeln!(stdin, "{command}").map_err(SteamCmdError::Io)?;
         stdin.flush().map_err(SteamCmdError::Io)?;
-
-        self.read_until_prompt()
+        Ok(())
     }
 
     /// Send `quit` and wait for the process to exit.
@@ -112,14 +132,29 @@ impl Session {
     /// Returns everything before the prompt. The prompt itself is
     /// consumed but not included in the output.
     fn read_until_prompt(&mut self) -> Result<String, SteamCmdError> {
+        self.read_until_prompt_with_callback(&mut |_| {})
+    }
+
+    /// Read bytes from stdout until the `Steam>` prompt, calling
+    /// `on_line` for each complete line as it arrives.
+    fn read_until_prompt_with_callback(
+        &mut self,
+        on_line: &mut impl FnMut(&str),
+    ) -> Result<String, SteamCmdError> {
         let mut buf = Vec::new();
+        let mut output = String::new();
         let mut byte = [0u8; 1];
         let prompt_bytes = PROMPT.as_bytes();
 
         loop {
             let n = self.stdout.read(&mut byte).map_err(SteamCmdError::Io)?;
             if n == 0 {
-                // EOF — process exited.
+                // EOF — flush any remaining partial line.
+                if !buf.is_empty() {
+                    let line = String::from_utf8_lossy(&buf);
+                    on_line(&line);
+                    output.push_str(&line);
+                }
                 break;
             }
             buf.push(byte[0]);
@@ -128,13 +163,27 @@ impl Session {
             if buf.len() >= prompt_bytes.len()
                 && buf[buf.len() - prompt_bytes.len()..] == *prompt_bytes
             {
-                // Remove the prompt from the output.
+                // Remove the prompt from the buffer.
                 buf.truncate(buf.len() - prompt_bytes.len());
+                // Flush any remaining partial line before the prompt.
+                if !buf.is_empty() {
+                    let line = String::from_utf8_lossy(&buf);
+                    on_line(&line);
+                    output.push_str(&line);
+                }
                 break;
+            }
+
+            // When we see a newline, flush the completed line.
+            if byte[0] == b'\n' {
+                let line = String::from_utf8_lossy(&buf);
+                on_line(&line);
+                output.push_str(&line);
+                buf.clear();
             }
         }
 
-        Ok(String::from_utf8_lossy(&buf).into_owned())
+        Ok(output)
     }
 }
 

@@ -202,13 +202,30 @@ impl SteamCmd {
         install_dir: &Path,
         validate: bool,
     ) -> Result<(), SteamCmdError> {
+        self.download_with_progress(app_id, install_dir, validate, |_| {})
+    }
+
+    /// Download or update an app, calling `on_line` for each output
+    /// line as it arrives (useful for progress reporting).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if steamcmd fails.
+    pub fn download_with_progress(
+        &self,
+        app_id: &str,
+        install_dir: &Path,
+        validate: bool,
+        on_line: impl FnMut(&str),
+    ) -> Result<(), SteamCmdError> {
         let mut session = self.session()?;
         session.run_command(&format!(
             "force_install_dir {}",
             install_dir.to_string_lossy()
         ))?;
         let validate_flag = if validate { " -validate" } else { "" };
-        session.run_command(&format!("app_update {app_id}{validate_flag}"))?;
+        session
+            .run_command_with_callback(&format!("app_update {app_id}{validate_flag}"), on_line)?;
         session.quit()
     }
 

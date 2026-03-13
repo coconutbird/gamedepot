@@ -88,6 +88,23 @@ impl SteamDepot {
     pub fn list_installed() -> Result<Vec<AppStatus>, DepotError> {
         list_installed_apps()
     }
+
+    /// Download with a per-line progress callback.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the download fails.
+    pub fn download_with_progress(
+        &self,
+        app_id: &str,
+        install_dir: &Path,
+        validate: bool,
+        on_line: impl FnMut(&str),
+    ) -> Result<(), DepotError> {
+        self.cmd
+            .download_with_progress(app_id, install_dir, validate, on_line)
+            .map_err(map_err)
+    }
 }
 
 impl Depot for SteamDepot {

@@ -150,7 +150,9 @@ fn build_depot(
 }
 
 fn cmd_download(depot: &SteamDepot, app_id: &str, dir: &Path, validate: bool) -> ExitCode {
-    match depot.download(app_id, dir, validate) {
+    match depot.download_with_progress(app_id, dir, validate, |line| {
+        print!("{line}");
+    }) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
