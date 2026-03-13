@@ -105,6 +105,30 @@ impl GogDl {
         self
     }
 
+    /// Return the URL the user should open in their browser to log in.
+    #[must_use]
+    pub fn login_url() -> String {
+        auth::TokenStore::login_url()
+    }
+
+    /// Complete login using the authorization code or redirect URL.
+    ///
+    /// `input` can be:
+    /// - The full redirect URL (e.g. `https://embed.gog.com/on_login_success?...&code=XYZ`)
+    /// - Just the bare code value
+    ///
+    /// On success the instance is ready for authenticated requests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the code cannot be extracted or the token
+    /// exchange fails.
+    pub fn login_with_code(&mut self, input: &str) -> Result<(), GogError> {
+        let store = auth::TokenStore::from_authorization_code(input)?;
+        self.token_store = Some(store);
+        Ok(())
+    }
+
     /// Override the locale (e.g. `"de-DE"`).
     #[must_use]
     pub fn with_locale(mut self, locale: impl Into<String>) -> Self {
